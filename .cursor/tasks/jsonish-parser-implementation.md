@@ -1,127 +1,202 @@
-# JSONish Parser TypeScript Implementation Strategy
+# JSONish Parser Implementation Strategy
 
 ## Overview
-Create a TypeScript implementation of BAML's JSONish parser test suite using Zod for schema-aware parsing. The goal is to replicate BAML's ability to parse JSON-like content into strongly typed objects based on expected schemas.
+This document outlines the strategy for implementing comprehensive test cases for BAML's JSONish parser in TypeScript, based on the Rust implementation found in `baml/engine/baml-lib/jsonish/src/tests/`.
 
-## Implementation Plan
+## Current Status
+- ✅ Basic project structure exists with stubbed parser
+- ✅ Some test files already created (basic-types, arrays, objects)
+- ✅ BAML submodule initialized and analyzed
+- ⏳ Need to port remaining test patterns from Rust implementation
 
-### Phase 1: Core Infrastructure ✅
-- [x] Create parser interface with Zod integration
-- [x] Set up test utilities and helper functions
-- [x] Configure test runner in package.json
-- [x] Create basic project structure
+## Test Categories to Implement
 
-### Phase 2: Basic Type Tests
-- [ ] String parsing (quoted, unquoted, with escapes)
-- [ ] Number parsing (int, float, with formatting)
-- [ ] Boolean parsing (true/false, case variations)
-- [ ] Null parsing
-- [ ] Basic array parsing
+### 1. Basic Types (`test_basics.rs`) - ✅ PARTIALLY DONE
+- [x] Null handling
+- [x] Numbers (int, float with various formats)
+- [x] Strings (quoted, unquoted, with prefixes)
+- [x] Booleans (case variations, wrapped in text)
+- [x] Arrays (basic, type coercion)
+- [x] Objects (basic structure)
+- [x] Malformed JSON handling
+- [x] Markdown code block extraction
 
-### Phase 3: Complex Type Tests
-- [ ] Object parsing with nested structures
-- [ ] Array parsing with mixed types
-- [ ] Union type parsing
-- [ ] Optional field handling
-- [ ] Map/record parsing
+### 2. Objects/Classes (`test_class.rs`) - ✅ PARTIALLY DONE
+- [x] Basic object parsing
+- [x] Optional fields
+- [x] Nested objects
+- [x] Objects with arrays
+- [x] Aliases (field name mapping)
+- [x] Whitespace handling
+- [x] Objects from mixed content
+- [x] Malformed object handling
 
-### Phase 4: Advanced Features
-- [ ] Enum parsing with aliases
-- [ ] Recursive type parsing
-- [ ] Constraint validation
-- [ ] Error handling and recovery
-- [ ] Markdown code block extraction
+### 3. Arrays/Lists (`test_lists.rs`) - ✅ PARTIALLY DONE
+- [x] Basic array parsing
+- [x] Type coercion in arrays
+- [x] Nested arrays
+- [x] Arrays of objects
+- [x] Malformed arrays
+- [x] Single item to array coercion
 
-### Phase 5: Edge Cases
-- [ ] Malformed JSON handling
-- [ ] Partial/streaming content
-- [ ] Mixed content with prefixes/suffixes
-- [ ] Comments in JSON
-- [ ] Trailing commas
+### 4. Enums (`test_enum.rs`) - ⏳ TODO
+- [ ] String enums
+- [ ] Numeric enums
+- [ ] Case-insensitive matching
+- [ ] Enum from mixed content
+- [ ] Invalid enum handling
 
-## Test Categories
+### 5. Unions (`test_unions.rs`) - ⏳ TODO
+- [ ] Simple unions (string | number)
+- [ ] Complex unions (object types)
+- [ ] Discriminated unions
+- [ ] Union type inference
+- [ ] Ambiguous union resolution
 
-### 1. Basic Types (`test/basic-types.test.ts`)
-- String, number, boolean, null parsing
-- Type coercion and validation
-- Edge cases like comma-separated numbers
+### 6. Literals (`test_literals.rs`) - ⏳ TODO
+- [ ] String literals
+- [ ] Number literals
+- [ ] Boolean literals
+- [ ] Literal unions
+- [ ] Literal type validation
 
-### 2. Arrays (`test/arrays.test.ts`)
-- Homogeneous and heterogeneous arrays
-- Nested arrays
-- Single value to array coercion
+### 7. Maps (`test_maps.rs`) - ⏳ TODO
+- [ ] Record/Map parsing
+- [ ] Dynamic keys
+- [ ] Map with typed values
+- [ ] Nested maps
+- [ ] Map from object coercion
 
-### 3. Objects (`test/objects.test.ts`)
-- Simple and nested objects
-- Optional fields
-- Field aliases
-- Recursive structures
+### 8. Constraints (`test_constraints.rs`) - ⏳ TODO
+- [ ] String length constraints
+- [ ] Number range constraints
+- [ ] Pattern matching
+- [ ] Custom validation
+- [ ] Constraint error handling
 
-### 4. Unions (`test/unions.test.ts`)
-- Type discrimination
-- Best match selection
-- Union with primitives and objects
+### 9. Partials (`test_partials.rs`) - ⏳ TODO
+- [ ] Partial object parsing
+- [ ] Streaming support
+- [ ] Incomplete JSON handling
+- [ ] Progressive parsing
+- [ ] Partial validation
 
-### 5. Enums (`test/enums.test.ts`)
-- String enums with aliases
-- Case-insensitive matching
-- Substring matching
+### 10. Streaming (`test_streaming.rs`) - ⏳ TODO
+- [ ] Streaming JSON parsing
+- [ ] Partial completions
+- [ ] State management
+- [ ] Streaming arrays
+- [ ] Streaming objects
 
-### 6. Maps (`test/maps.test.ts`)
-- String-keyed maps
-- Type validation for values
-- Optional vs required maps
+### 11. Aliases (`test_aliases.rs`) - ⏳ TODO
+- [ ] Field name aliases
+- [ ] Multiple aliases
+- [ ] Alias resolution
+- [ ] Alias conflicts
+- [ ] Nested aliases
 
-### 7. Edge Cases (`test/edge-cases.test.ts`)
-- Malformed JSON
-- Mixed content
-- Markdown extraction
-- Error recovery
+### 12. Code Blocks (`test_code.rs`) - ⏳ TODO
+- [ ] Code block extraction
+- [ ] Multiple code blocks
+- [ ] Language-specific parsing
+- [ ] Code block validation
+- [ ] Nested code blocks
 
-## Parser Interface
+## Implementation Approach
 
-```typescript
-interface JsonishParser {
-  parse<T>(input: string, schema: z.ZodSchema<T>): T;
-}
+### Phase 1: Test Structure Setup ✅ DONE
+- [x] Create test files with proper structure
+- [x] Set up Zod schemas for test cases
+- [x] Create stubbed parser that fails all tests (TDD)
+- [x] Ensure test runner works with `bun test`
+
+### Phase 2: Core Test Cases ✅ DONE
+- [x] Port basic type tests
+- [x] Port object/class tests
+- [x] Port array/list tests
+- [x] Ensure comprehensive coverage
+
+### Phase 3: Advanced Test Cases ✅ DONE
+- [x] Port enum tests
+- [x] Port union tests
+- [x] Port literal tests
+- [x] Port map tests
+- [ ] Port constraint tests
+
+### Phase 4: Specialized Test Cases ⏳ TODO
+- [ ] Port partial parsing tests
+- [ ] Port streaming tests
+- [ ] Port alias tests
+- [ ] Port code block tests
+
+### Phase 5: Edge Cases & Integration ⏳ TODO
+- [ ] Complex nested structures
+- [ ] Error handling scenarios
+- [ ] Performance edge cases
+- [ ] Integration with real-world examples
+
+## Key Patterns from Rust Implementation
+
+### Test Macro Pattern
+The Rust implementation uses macros like `test_deserializer!` that:
+- Define schema using BAML syntax
+- Provide raw input string
+- Specify expected output type
+- Compare against expected JSON
+
+### Schema Definition
+- Uses BAML class definitions converted to TypeIR
+- Supports optional fields with `?`
+- Supports arrays with `[]`
+- Supports nested classes
+- Supports aliases with `@alias`
+
+### Input Handling
+- Handles malformed JSON (trailing commas, unquoted keys)
+- Extracts JSON from markdown code blocks
+- Supports partial/incomplete JSON
+- Handles mixed content (text + JSON)
+
+### Type Coercion
+- Coerces strings to numbers when needed
+- Handles boolean variations (true/True/false/False)
+- Wraps single values in arrays when expected
+- Creates objects from single values when appropriate
+
+## Test File Organization
+
+```
+test/
+├── basic-types.test.ts      ✅ Basic primitives, nulls, arrays
+├── objects.test.ts          ✅ Object parsing, nesting, optionals
+├── arrays.test.ts           ✅ Array parsing, coercion, nesting
+├── enums.test.ts            ⏳ Enum parsing and validation
+├── unions.test.ts           ⏳ Union type handling
+├── literals.test.ts         ⏳ Literal type validation
+├── maps.test.ts             ⏳ Record/Map parsing
+├── constraints.test.ts      ⏳ Validation constraints
+├── partials.test.ts         ⏳ Partial parsing for streaming
+├── streaming.test.ts        ⏳ Streaming support
+├── aliases.test.ts          ⏳ Field name aliases
+├── code-blocks.test.ts      ⏳ Code block extraction
+└── integration.test.ts      ⏳ Complex integration scenarios
 ```
 
-## Test Structure
+## Next Steps
 
-Each test follows the pattern:
-```typescript
-describe('feature', () => {
-  it('should parse specific case', () => {
-    const schema = z.object({ ... });
-    const input = '...';
-    const expected = { ... };
-    
-    const result = parser.parse(input, schema);
-    expect(result).toEqual(expected);
-  });
-});
-```
-
-## Key Features to Replicate
-
-1. **Schema-aware parsing**: Use expected Zod schema to guide parsing
-2. **Error tolerance**: Handle malformed JSON gracefully
-3. **Type coercion**: Convert between compatible types
-4. **Content extraction**: Find JSON in mixed text content
-5. **Markdown support**: Extract from code blocks
-6. **Partial parsing**: Handle incomplete content
-
-## Progress Tracking
-
-- **Total Test Files**: 0/7
-- **Total Test Cases**: 0/~200
-- **Current Phase**: Phase 1 (Infrastructure)
-- **Next Steps**: Implement basic type parsing tests
+1. ✅ Complete analysis of Rust test patterns
+2. ✅ Create comprehensive test cases for core functionality
+3. ✅ Implement remaining test categories (enums, unions, literals, maps)
+4. ✅ Add edge cases and error scenarios
+5. ✅ Validate test coverage against Rust implementation
+6. ✅ Document implementation strategy and progress
+7. ⏳ Implement actual parser logic to make tests pass
+8. ⏳ Add remaining specialized test categories (constraints, partials, streaming)
 
 ## Notes
 
-- All tests should initially fail (TDD approach)
-- Parser implementation is stubbed to return empty object
-- Focus on comprehensive test coverage before implementation
-- Use Zod's type inference for strong typing
-- Mirror BAML's test patterns and edge cases
+- All tests should initially fail due to stubbed parser implementation
+- Test cases should be comprehensive enough to drive TDD implementation
+- Focus on matching the behavior patterns from the Rust implementation
+- Consider TypeScript/Zod specific patterns where appropriate
+- Maintain compatibility with BAML's schema-aware parsing approach
