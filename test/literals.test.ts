@@ -1,407 +1,416 @@
-import { describe, it, expect } from 'bun:test';
-import { z } from 'zod';
-import { createParser } from '../src/parser';
+import { describe, expect, it } from "bun:test";
+import { z } from "zod";
+import { createParser } from "../src/parser";
 
 const parser = createParser();
 
-describe('Literals', () => {
-  describe('String Literals', () => {
-    it('should parse exact string literal', () => {
-      const schema = z.literal('hello');
-      const input = '"hello"';
-      const expected = 'hello';
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+describe("Literals", () => {
+	describe("Basic Literal Tests", () => {
+		it("should parse positive integer literal", () => {
+			const schema = z.literal(2);
+			const input = "2";
+			const expected = 2;
 
-    it('should parse string literal without quotes', () => {
-      const schema = z.literal('world');
-      const input = 'world';
-      const expected = 'world';
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
 
-    it('should parse string literal from mixed content', () => {
-      const schema = z.literal('success');
-      const input = 'The status is: success';
-      const expected = 'success';
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+		it("should parse negative integer literal", () => {
+			const schema = z.literal(-42);
+			const input = "-42";
+			const expected = -42;
 
-    it('should parse string literal with special characters', () => {
-      const schema = z.literal('hello-world_123');
-      const input = '"hello-world_123"';
-      const expected = 'hello-world_123';
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
 
-    it('should parse string literal from JSON object', () => {
-      const schema = z.object({
-        status: z.literal('active')
-      });
-      const input = '{"status": "active"}';
-      const expected: { status: 'active' } = { status: 'active' };
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
-  });
+		it("should parse zero literal", () => {
+			const schema = z.literal(0);
+			const input = "0";
+			const expected = 0;
 
-  describe('Number Literals', () => {
-    it('should parse exact number literal', () => {
-      const schema = z.literal(42);
-      const input = '42';
-      const expected = 42;
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
 
-    it('should parse negative number literal', () => {
-      const schema = z.literal(-10);
-      const input = '-10';
-      const expected = -10;
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+		it("should parse boolean true literal", () => {
+			const schema = z.literal(true);
+			const input = "true";
+			const expected = true;
 
-    it('should parse float literal', () => {
-      const schema = z.literal(3.14);
-      const input = '3.14';
-      const expected = 3.14;
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
 
-    it('should parse zero literal', () => {
-      const schema = z.literal(0);
-      const input = '0';
-      const expected = 0;
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+		it("should parse boolean false literal", () => {
+			const schema = z.literal(false);
+			const input = "false";
+			const expected = false;
 
-    it('should parse number literal from JSON object', () => {
-      const schema = z.object({
-        version: z.literal(1)
-      });
-      const input = '{"version": 1}';
-      const expected: { version: 1 } = { version: 1 };
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
-  });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
+	});
 
-  describe('Boolean Literals', () => {
-    it('should parse true literal', () => {
-      const schema = z.literal(true);
-      const input = 'true';
-      const expected = true;
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+	describe("String Literal Tests with Case Coercion", () => {
+		it("should parse uppercase string with double quotes", () => {
+			const schema = z.literal("TWO");
+			const input = '"TWO"';
+			const expected = "TWO";
 
-    it('should parse false literal', () => {
-      const schema = z.literal(false);
-      const input = 'false';
-      const expected = false;
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
 
-    it('should parse true literal with case variation', () => {
-      const schema = z.literal(true);
-      const input = 'True';
-      const expected = true;
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+		it("should parse uppercase string without quotes", () => {
+			const schema = z.literal("TWO");
+			const input = "TWO";
+			const expected = "TWO";
 
-    it('should parse false literal with case variation', () => {
-      const schema = z.literal(false);
-      const input = 'False';
-      const expected = false;
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
 
-    it('should parse boolean literal from JSON object', () => {
-      const schema = z.object({
-        enabled: z.literal(true)
-      });
-      const input = '{"enabled": true}';
-      const expected: { enabled: true } = { enabled: true };
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
-  });
+		it("should parse string with mismatched case (case coercion)", () => {
+			const schema = z.literal("TWO");
+			const input = "Two";
+			const expected = "TWO";
 
-  describe('Literal Unions', () => {
-    it('should parse string literal union', () => {
-      const schema = z.union([z.literal('red'), z.literal('green'), z.literal('blue')]);
-      
-      const redResult = parser.parse('red', schema);
-      expect(redResult).toBe('red');
-      
-      const greenResult = parser.parse('"green"', schema);
-      expect(greenResult).toBe('green');
-      
-      const blueResult = parser.parse('blue', schema);
-      expect(blueResult).toBe('blue');
-    });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
 
-    it('should parse number literal union', () => {
-      const schema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
-      
-      const oneResult = parser.parse('1', schema);
-      expect(oneResult).toBe(1);
-      
-      const twoResult = parser.parse('2', schema);
-      expect(twoResult).toBe(2);
-      
-      const threeResult = parser.parse('3', schema);
-      expect(threeResult).toBe(3);
-    });
+		it("should parse lowercase string and coerce to uppercase", () => {
+			const schema = z.literal("TWO");
+			const input = "two";
+			const expected = "TWO";
 
-    it('should parse mixed literal union', () => {
-      const schema = z.union([z.literal('auto'), z.literal(100), z.literal(true)]);
-      
-      const autoResult = parser.parse('auto', schema);
-      expect(autoResult).toBe('auto');
-      
-      const numberResult = parser.parse('100', schema);
-      expect(numberResult).toBe(100);
-      
-      const booleanResult = parser.parse('true', schema);
-      expect(booleanResult).toBe(true);
-    });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
+	});
 
-    it('should parse literal union from JSON object', () => {
-      const schema = z.object({
-        size: z.union([z.literal('small'), z.literal('medium'), z.literal('large')])
-      });
-      
-      const input = '{"size": "medium"}';
-      const expected = { size: 'medium' };
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
-  });
+	describe("Text Extraction Tests", () => {
+		it("should extract literal from text preceded by extra text", () => {
+			const schema = z.literal("TWO");
+			const input = "The answer is TWO";
+			const expected = "TWO";
 
-  describe('Literal Arrays', () => {
-    it('should parse array of string literals', () => {
-      const schema = z.array(z.literal('item'));
-      const input = '["item", "item", "item"]';
-      const expected = ['item', 'item', 'item'];
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
 
-    it('should parse array of number literals', () => {
-      const schema = z.array(z.literal(42));
-      const input = '[42, 42]';
-      const expected = [42, 42];
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+		it("should extract literal from text with case mismatch", () => {
+			const schema = z.literal("TWO");
+			const input = "The answer is Two";
+			const expected = "TWO";
 
-    it('should parse array of literal union', () => {
-      const schema = z.array(z.union([z.literal('yes'), z.literal('no')]));
-      const input = '["yes", "no", "yes"]';
-      const expected = ['yes', 'no', 'yes'];
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
-  });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
 
-  describe('Literal Validation', () => {
-    it('should handle exact match requirement', () => {
-      const schema = z.literal('exact');
-      const input = 'exact';
-      const expected = 'exact';
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+		it("should extract literal from text followed by extra text", () => {
+			const schema = z.literal("TWO");
+			const input = "TWO is the answer";
+			const expected = "TWO";
 
-    it('should handle case sensitivity for string literals', () => {
-      const schema = z.literal('CaseSensitive');
-      const input = 'CaseSensitive';
-      const expected = 'CaseSensitive';
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
 
-    it('should handle precision for number literals', () => {
-      const schema = z.literal(1.5);
-      const input = '1.5';
-      const expected = 1.5;
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+		it("should extract literal from text followed by extra text with case mismatch", () => {
+			const schema = z.literal("TWO");
+			const input = "Two is the answer";
+			const expected = "TWO";
 
-    it('should validate literal in complex object', () => {
-      const schema = z.object({
-        type: z.literal('user'),
-        id: z.number(),
-        active: z.literal(true)
-      });
-      
-      const input = '{"type": "user", "id": 123, "active": true}';
-      const expected = { type: 'user', id: 123, active: true };
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
-  });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
+	});
 
-  describe('Literal Error Handling', () => {
-    it('should handle non-matching string literal gracefully', () => {
-      const schema = z.literal('expected');
-      const input = 'unexpected';
-      
-      // Should either coerce or handle gracefully
-      expect(() => parser.parse(input, schema)).not.toThrow();
-    });
+	describe("Quote Position Tests", () => {
+		it("should extract quoted literal preceded by extra text", () => {
+			const schema = z.literal("TWO");
+			const input = 'The answer is "TWO"';
+			const expected = "TWO";
 
-    it('should handle non-matching number literal gracefully', () => {
-      const schema = z.literal(42);
-      const input = '43';
-      
-      // Should either coerce or handle gracefully
-      expect(() => parser.parse(input, schema)).not.toThrow();
-    });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
 
-    it('should handle type mismatch gracefully', () => {
-      const schema = z.literal('string');
-      const input = '123';
-      
-      // Should either coerce or handle gracefully
-      expect(() => parser.parse(input, schema)).not.toThrow();
-    });
+		it("should extract quoted literal preceded by extra text with case mismatch", () => {
+			const schema = z.literal("TWO");
+			const input = 'The answer is "two"';
+			const expected = "TWO";
 
-    it('should handle empty input gracefully', () => {
-      const schema = z.literal('value');
-      const input = '';
-      
-      // Should handle empty input gracefully
-      expect(() => parser.parse(input, schema)).not.toThrow();
-    });
-  });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
 
-  describe('Literal Extraction from Text', () => {
-    it('should extract string literal from mixed content', () => {
-      const schema = z.literal('approved');
-      const input = 'The request has been approved by the system.';
-      const expected = 'approved';
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+		it("should extract quoted literal followed by extra text", () => {
+			const schema = z.literal("TWO");
+			const input = '"TWO" is the answer';
+			const expected = "TWO";
 
-    it('should extract number literal from text', () => {
-      const schema = z.literal(404);
-      const input = 'Error 404: Not Found';
-      const expected = 404;
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
 
-    it('should extract boolean literal from text', () => {
-      const schema = z.literal(true);
-      const input = 'The statement is true.';
-      const expected = true;
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+		it("should extract quoted literal followed by extra text with case mismatch", () => {
+			const schema = z.literal("TWO");
+			const input = '"Two" is the answer';
+			const expected = "TWO";
 
-    it('should extract literal from markdown', () => {
-      const schema = z.literal('confirmed');
-      const input = `
-        Status update:
-        \`\`\`
-        confirmed
-        \`\`\`
-      `;
-      const expected = 'confirmed';
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
-  });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
+	});
 
-  describe('Nested Literal Structures', () => {
-    it('should handle nested object with literals', () => {
-      const schema = z.object({
-        metadata: z.object({
-          version: z.literal('1.0'),
-          type: z.literal('config')
-        }),
-        enabled: z.literal(true)
-      });
-      
-      const input = `{
-        "metadata": {
-          "version": "1.0",
-          "type": "config"
-        },
-        "enabled": true
+	describe("Special Cases", () => {
+		it("should handle case mismatch in complex text (upper in text, lower expected)", () => {
+			const schema = z.literal("two");
+			const input = 'The ansewr "TWO" is the correct one';
+			const expected = "two";
+
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
+
+		it("should handle literal with special characters", () => {
+			const schema = z.literal("TWO");
+			const input = '"TWO!@#"';
+			const expected = "TWO";
+
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
+
+		it("should handle literal with whitespace", () => {
+			const schema = z.literal("TWO");
+			const input = '"  TWO  "';
+			const expected = "TWO";
+
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
+	});
+
+	describe("Union Literal Tests", () => {
+		it("should parse union literal integer", () => {
+			const schema = z.union([z.literal(2), z.literal(3)]);
+			const input = "2";
+			const expected = 2;
+
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
+
+		it("should handle ambiguous union with both literals (should fail)", () => {
+			const schema = z.union([z.literal(2), z.literal(3)]);
+			const input = "2 or 3";
+
+			// This should fail due to ambiguity
+			expect(() => parser.parse(input, schema)).toThrow();
+		});
+
+		it("should handle ambiguous boolean union (should fail)", () => {
+			const schema = z.union([z.literal(2), z.literal(3)]);
+			const input = "true or false";
+
+			// This should fail due to ambiguity
+			expect(() => parser.parse(input, schema)).toThrow();
+		});
+
+		it("should handle ambiguous string union (picks first match)", () => {
+			const schema = z.union([z.literal("TWO"), z.literal("THREE")]);
+			const input = "TWO or THREE";
+			const expected = "TWO"; // Should pick the first match
+
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
+	});
+
+	describe("Object Single Value Extraction Tests", () => {
+		it("should extract integer from object with single key", () => {
+			const schema = z.union([
+				z.literal(1),
+				z.literal(true),
+				z.literal("THREE"),
+			]);
+			const input = `{
+        "status": 1
       }`;
-      
-      const expected = {
-        metadata: {
-          version: '1.0',
-          type: 'config'
-        },
-        enabled: true
-      };
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
+			const expected = 1;
 
-    it('should handle array of objects with literals', () => {
-      const schema = z.array(z.object({
-        status: z.literal('active'),
-        priority: z.literal(1)
-      }));
-      
-      const input = `[
-        {"status": "active", "priority": 1},
-        {"status": "active", "priority": 1}
-      ]`;
-      
-      const expected = [
-        { status: 'active', priority: 1 },
-        { status: 'active', priority: 1 }
-      ];
-      
-      const result = parser.parse(input, schema);
-      expect(result).toEqual(expected);
-    });
-  });
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
+
+		it("should extract integer from object (duplicate test)", () => {
+			const schema = z.union([
+				z.literal(1),
+				z.literal(true),
+				z.literal("THREE"),
+			]);
+			const input = `{
+        "status": 1
+      }`;
+			const expected = 1;
+
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
+
+		it("should extract boolean from object with single key", () => {
+			const schema = z.union([
+				z.literal(1),
+				z.literal(true),
+				z.literal("THREE"),
+			]);
+			const input = `{
+        "result": true
+      }`;
+			const expected = true;
+
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
+
+		it("should extract string from object with single key", () => {
+			const schema = z.union([
+				z.literal(1),
+				z.literal(true),
+				z.literal("THREE"),
+			]);
+			const input = `{
+        "value": "THREE"
+      }`;
+			const expected = "THREE";
+
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
+	});
+
+	describe("Ambiguity Tests", () => {
+		it("should handle complete string vs substring ambiguity", () => {
+			const schema = z.union([
+				z.literal("pay"),
+				z.literal("pay_without_credit_card"),
+			]);
+			const input = `
+        "pay"
+      `;
+			const expected = "pay";
+
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
+
+		it("should handle incomplete string ambiguity (streaming failure)", () => {
+			const schema = z.union([
+				z.literal("pay"),
+				z.literal("pay_without_credit_card"),
+			]);
+			const input = `
+        "pay
+      `;
+
+			// This should fail due to incomplete streaming
+			expect(() => parser.parse(input, schema)).toThrow();
+		});
+	});
+
+	describe("Object Edge Cases (Should Fail)", () => {
+		it("should fail with object having multiple keys", () => {
+			const schema = z.union([
+				z.literal(1),
+				z.literal(true),
+				z.literal("THREE"),
+			]);
+			const input = `{
+        "status": 1,
+        "message": "success"
+      }`;
+
+			// Should fail because object has multiple keys
+			expect(() => parser.parse(input, schema)).toThrow();
+		});
+
+		it("should fail with nested object", () => {
+			const schema = z.union([
+				z.literal(1),
+				z.literal(true),
+				z.literal("THREE"),
+			]);
+			const input = `{
+        "status": {
+          "code": 1
+        }
+      }`;
+
+			// Should fail because object is nested
+			expect(() => parser.parse(input, schema)).toThrow();
+		});
+
+		it("should fail with object containing array", () => {
+			const schema = z.union([
+				z.literal(1),
+				z.literal(true),
+				z.literal("THREE"),
+			]);
+			const input = `{
+        "values": [1]
+      }`;
+
+			// Should fail because object contains array
+			expect(() => parser.parse(input, schema)).toThrow();
+		});
+	});
+
+	describe("Quote Handling Tests", () => {
+		it("should handle quoted string in object", () => {
+			const schema = z.union([
+				z.literal(1),
+				z.literal(true),
+				z.literal("THREE"),
+			]);
+			const input = `{
+        "value": "\\"THREE\\""
+      }`;
+			const expected = "THREE";
+
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
+
+		it("should extract literal from object with extra text", () => {
+			const schema = z.union([
+				z.literal(1),
+				z.literal(true),
+				z.literal("THREE"),
+			]);
+			const input = `{
+        "value": "The answer is THREE"
+      }`;
+			const expected = "THREE";
+
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
+	});
+
+	describe("Partial Tests", () => {
+		it("should handle partial class with null literal", () => {
+			const schema = z.object({
+				bar: z.literal("hello").optional().nullable(),
+			});
+			const input = "{}";
+			const expected = { bar: null };
+
+			const result = parser.parse(input, schema);
+			expect(result).toEqual(expected);
+		});
+	});
 });
