@@ -1,0 +1,3 @@
+[submodule "baml"]
+	path = baml
+	url = https://github.com/boundaryml/baml
