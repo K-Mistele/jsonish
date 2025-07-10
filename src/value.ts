@@ -129,6 +129,24 @@ export namespace ValueUtils {
     }
 
     export function simplify(value: Value, isDone: boolean): Value {
+        // Handle arrays that might be wrapping a parsed result with original string
+        if (value.type === 'array' && value.value.length === 2) {
+            const [first, second] = value.value
+            // Check if this is a wrapped result (parsed value + original string)
+            if (
+                second.type === 'string' &&
+                first.type !== 'string' &&
+                value.completionState === CompletionState.Complete
+            ) {
+                // Convert to any_of to let schema-aware layer choose
+                return {
+                    type: 'any_of',
+                    choices: [first, second],
+                    originalString: second.value
+                }
+            }
+        }
+
         if (value.type === 'any_of') {
             const { choices, originalString } = value
             const simplifiedChoices = choices.map((c) => simplify(c, isDone))

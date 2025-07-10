@@ -55,7 +55,7 @@ export class CoreParser {
         }
 
         // Strategy 3: Try finding all JSON objects (if enabled)
-        if (options.allowMalformed) {
+        if (options.allowMalformed && options.allowFindingAllJsonObjects !== false) {
             try {
                 const jsonObjects = this.findAllJSONObjects(input, options)
                 if (jsonObjects.length > 0) {
@@ -74,7 +74,18 @@ export class CoreParser {
                 const iterativeParser = new IterativeParser()
                 const iterativeResult = iterativeParser.parse(input)
 
-                // Always wrap iterative parser result in array with original string (matches Rust)
+                // If the iterative parser successfully parsed the entire input as a single value,
+                // return it directly without wrapping
+                if (iterativeResult.type === 'array' && input.trim().startsWith('[') && input.trim().endsWith(']')) {
+                    console.log(`[DEBUG] Iterative parser returned array directly`)
+                    return iterativeResult
+                }
+                if (iterativeResult.type === 'object' && input.trim().startsWith('{') && input.trim().endsWith('}')) {
+                    console.log(`[DEBUG] Iterative parser returned object directly`)
+                    return iterativeResult
+                }
+
+                // Otherwise wrap iterative parser result in array with original string (matches Rust)
                 const arrayResult: Value = {
                     type: 'array',
                     value: [
@@ -206,8 +217,8 @@ export class CoreParser {
                         const nextOptions = {
                             ...options,
                             depth: options.depth + 1,
-                            allowMalformed: false, // Disable malformed parsing to prevent recursion
-                            extractFromMarkdown: false // Disable markdown extraction
+                            extractFromMarkdown: false, // Disable markdown extraction
+                            allowFindingAllJsonObjects: false // Prevent recursive findAllJSONObjects
                         }
                         const parsed = this.parseInternal(jsonStr, nextOptions, false)
                         results.push(parsed)
@@ -231,11 +242,23 @@ export class CoreParser {
         }
 
         if (results.length === 1) {
-            // For single result, wrap with original string like Rust implementation
+            const singleResult = results[0]
+
+            // If the single result is an array or object that represents the entire input,
+            // return it directly without wrapping
+            const trimmedInput = originalInput.trim()
+            if (singleResult.type === 'array' && trimmedInput.startsWith('[') && trimmedInput.endsWith(']')) {
+                return singleResult
+            }
+            if (singleResult.type === 'object' && trimmedInput.startsWith('{') && trimmedInput.endsWith('}')) {
+                return singleResult
+            }
+
+            // Otherwise, wrap with original string like Rust implementation
             return {
                 type: 'array',
                 value: [
-                    results[0],
+                    singleResult,
                     {
                         type: 'string',
                         value: originalInput,

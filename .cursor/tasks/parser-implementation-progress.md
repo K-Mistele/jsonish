@@ -19,7 +19,8 @@ Implement BAML's JSONish parser in TypeScript based on the Rust implementation, 
 - **Breakdown**: 40 pass, 27 fail - core parsing functionality
 - **Priority**: Must achieve 100% here before moving to advanced test files
 
-NOTE: run tests like `bun test test/basics.test.ts 2>&1` to get stdout properly
+NOTE: run tests like `bun test test/basics.test.ts 2>&1` to get stdout properly.
+NOTE: at each step, refer to the rust jsonish implementation to make sure your code matches.
 
 ## ✅ Architectural Foundations Laid (Not Production-Ready)
 

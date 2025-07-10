@@ -32,6 +32,8 @@ export interface ParseOptions {
     allowMalformed?: boolean
     /** Attempt to coerce types when possible */
     coerceTypes?: boolean
+    /** Internal flag to prevent recursive findAllJSONObjects calls */
+    allowFindingAllJsonObjects?: boolean
 }
 
 /**
@@ -41,7 +43,8 @@ export const DEFAULT_PARSE_OPTIONS: ParseOptions = {
     allowPartial: false,
     extractFromMarkdown: true,
     allowMalformed: true,
-    coerceTypes: true
+    coerceTypes: true,
+    allowFindingAllJsonObjects: true
 }
 
 /**
@@ -55,7 +58,7 @@ export class SchemaAwareJsonishParser implements JsonishParser {
         const parsedValue = this.coreParser.parse(input, options)
 
         // Convert the Value to a plain object and coerce types based on schema
-        const plainObject = this.valueToPlainObject(parsedValue, schema, options)
+        const plainObject = this.valueToPlainObject(parsedValue, schema, options, input)
 
         // Validate against the schema
         const result = schema.parse(plainObject)
@@ -63,7 +66,26 @@ export class SchemaAwareJsonishParser implements JsonishParser {
         return result
     }
 
-    private valueToPlainObject(value: Value, schema: z.ZodSchema<any>, options: ParseOptions): any {
+    private valueToPlainObject(
+        value: Value,
+        schema: z.ZodSchema<any>,
+        options: ParseOptions,
+        originalInput?: string
+    ): any {
+        // Handle string schema preference for quoted strings
+        if (this.getSchemaType(schema) === 'string' && originalInput) {
+            const trimmed = originalInput.trim()
+            // If the input is a quoted string and we successfully parsed it, return the original
+            if (
+                (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+                (trimmed.startsWith("'") && trimmed.endsWith("'"))
+            ) {
+                if (value.type === 'string') {
+                    return originalInput
+                }
+            }
+        }
+
         // Handle AnyOf by trying each choice - prefer string for string schemas
         if (value.type === 'any_of') {
             const schemaType = this.getSchemaType(schema)
@@ -73,7 +95,7 @@ export class SchemaAwareJsonishParser implements JsonishParser {
                 // Try each parsed choice first
                 for (const choice of value.choices) {
                     try {
-                        const converted = this.valueToPlainObject(choice, schema, options)
+                        const converted = this.valueToPlainObject(choice, schema, options, originalInput)
                         const validated = schema.safeParse(converted)
                         if (validated.success) {
                             return converted
@@ -105,7 +127,7 @@ export class SchemaAwareJsonishParser implements JsonishParser {
                 // Otherwise, try parsed choices first (might extract better typed values)
                 for (const choice of value.choices) {
                     try {
-                        const converted = this.valueToPlainObject(choice, schema, options)
+                        const converted = this.valueToPlainObject(choice, schema, options, originalInput)
                         const validated = schema.safeParse(converted)
                         if (validated.success) {
                             return converted
