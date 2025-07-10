@@ -101,7 +101,6 @@ export class SchemaAwareJsonishParser implements JsonishParser {
     ): any {
         // Temporary debug log
         if (value.type === 'array' && this.getSchemaType(schema) === 'array') {
-            console.log('[DEBUG] Processing array value:', JSON.stringify(value, null, 2))
         }
 
         // Handle string schema preference for quoted strings

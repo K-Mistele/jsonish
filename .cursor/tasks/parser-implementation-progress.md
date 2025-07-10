@@ -14,8 +14,8 @@ Implement BAML's JSONish parser in TypeScript based on the Rust implementation, 
 - **Status**: 🔧 **ACTIVE DEVELOPMENT** - Major functionality gaps remain
 
 ### **Current Focus: `test/basics.test.ts`** (Foundation Layer)
-- **Current**: 64/67 tests passing (**95.5% pass rate**) ✅ EXCELLENT PROGRESS!
-- **Previous**: 56/67 tests passing (**83.6% pass rate**)
+- **Current**: 64/67 tests passing (**95.5% pass rate**) ✅ NEAR COMPLETION!
+- **Previous**: 40/67 tests passing (**59.7% pass rate**)
 - **Target**: 67/67 tests passing (**100% pass rate**)
 - **Breakdown**: 64 pass, 3 fail - core parsing functionality
 - **Priority**: Must achieve 100% here before moving to advanced test files
@@ -23,226 +23,137 @@ Implement BAML's JSONish parser in TypeScript based on the Rust implementation, 
 NOTE: run tests like `bun test test/basics.test.ts 2>&1` to get stdout properly.
 NOTE: at each step, refer to the rust jsonish implementation to make sure your code matches.
 
-## ✅ Architectural Foundations Laid (Not Production-Ready)
+## ✅ Major Session Accomplishments (Session 3)
 
-### 1. **Core Architecture Implementation** ✅ FOUNDATION COMPLETE
-- ✅ **Value System**: Complete `Value` enum with all types (string, number, boolean, null, object, array, any_of, markdown, fixed_json)
-- ✅ **CompletionState**: Streaming support with `Complete`/`Incomplete` tracking working perfectly
-- ✅ **ValueUtils**: Helper functions for simplification and completion state management
-- ✅ **Modular Design**: Follows BAML's modular parser architecture with separated strategies
+### **🎯 Fixed 24 Tests This Session!** (40→64, +60% improvement)
 
-### 2. **Multi-Strategy Parsing Engine** ⚠️ PARTIAL - NEEDS COORDINATION FIXES
-- ✅ **Standard JSON Parsing**: Basic JSON.parse() with error handling - working for valid JSON
-- ✅ **Markdown Extraction**: Extract JSON from ```json code blocks with regex - working 
-- ⚠️ **JSON Object Detection**: Finds objects but recursive parsing options prevent proper handling
-- ❌ **Malformed JSON Recovery**: **BROKEN** - `allowMalformed: false` in recursive calls blocks iterative parser
-- ⚠️ **Iterative Parser**: State machine works correctly in isolation but not integrated properly
+1. **Fixed Infinite Recursion** ✅
+   - Added `allowFindingAllJsonObjects` flag to prevent recursive calls
+   - Matches Rust's `all_finding_all_json_objects` pattern
+   - Result: No more depth limit errors
 
-### 3. **Schema-Aware Type Coercion** ⚠️ PARTIAL - MANY EDGE CASES FAILING
-- ✅ **Zod Integration**: Basic integration working for simple cases
-- ⚠️ **Intelligent Coercion**: Working for basic types, failing for complex scenarios
-- ❌ **Array/Object Conversion**: Many conversion scenarios failing tests
-- ❌ **Union Type Resolution**: Multiple union type test failures
+2. **Fixed Array/Object Wrapping** ✅
+   - Updated `handleMultipleResults` to avoid double-wrapping single results
+   - Single arrays/objects that represent entire input returned directly
+   - Multiple results handled with proper nesting
 
-### 4. **Advanced Enum Pattern Extraction** ⚠️ PARTIAL IMPLEMENTATION 
-- ⚠️ **Case-Insensitive Matching**: Working for simple cases, complex patterns failing
-- ⚠️ **Pattern Extraction**: Basic patterns work, advanced extraction has issues
-- ⚠️ **Markdown Extraction**: Some markdown patterns work, others fail
-- ⚠️ **Word Boundary Detection**: Inconsistent results across test cases
-- ❌ **Alias Support**: Not fully implemented across all test scenarios
+3. **Fixed String Priority Logic** ✅
+   - String schemas now preserve quoted strings (`"hello"` → `"hello"`)
+   - Incomplete quoted strings preserved (`"hello` → `"hello`)
+   - Valid JSON objects/arrays returned as strings when schema expects string
 
-### 5. **Streaming & Partial JSON Support** ⚠️ ARCHITECTURE ONLY
-- ✅ **CompletionState Tracking**: Infrastructure in place
-- ❌ **Incomplete JSON Handling**: Many partial parsing tests failing
-- ❌ **Progressive Parsing**: Implementation incomplete
+4. **Fixed Boolean Extraction** ✅
+   - Case-insensitive boolean matching
+   - Ambiguous boolean detection (throws error when both "true" and "false" present)
+   - Boolean extraction from text and arrays working
 
-### 6. **🔥 CRITICAL ANALYSIS COMPLETED THIS SESSION**
-- ✅ **Identified Core Issue**: `findAllJSONObjects` method disables `allowMalformed` in recursive calls, preventing iterative parser from running
-- ✅ **Validated Iterative Parser**: Confirmed iterative parser works correctly: `[1, 2, 3,]` → `{type: 'array', value: [1, 2, 3]}`
-- ✅ **Updated Core Strategy Order**: Aligned with Rust implementation pattern
-- ✅ **Root Cause Found**: Malformed JSON detected correctly but recursive parsing options prevent proper handling
-- ✅ **Ready for Fix**: Have clear action plan to resolve the remaining parsing issues
+5. **Fixed Null Parsing** ✅
+   - Made null parsing case-sensitive (only lowercase "null" → null)
+   - "Null" and "None" treated as strings when targeting nullable schemas
+   - Matches Rust implementation exactly
 
-## 📊 Current Development Status - MAJOR WORK REMAINING
+6. **Fixed Key Whitespace Handling** ✅
+   - Object keys with whitespace now normalized when matching schema
+   - `{ " answer ": 42 }` correctly maps to schema field `answer`
+   - Preserves original keys in raw parsing
 
-### **Test Performance - NOT PRODUCTION-READY**
-- **Overall Suite**: **197/412 tests passing (47.8% pass rate)** ❌ **FAILING 52.2%**
-- **Current Focus (`basics.test.ts`)**: **40/67 tests passing (59.7% pass rate)** ❌ **FAILING 40.3%**
-- **Status**: **🚨 CRITICAL ISSUES** - Core parsing broken, extensive fixes needed
+7. **Fixed Markdown Type Selection** ✅
+   - Multiple markdown blocks now properly filtered by schema type
+   - Array schemas select array blocks, object schemas select object blocks
+   - Improved multi-result handling for schema-aware selection
 
-### **🔥 Critical Issues Identified in `basics.test.ts`**
-1. **Array Parsing**: `[1, 2, 3,]` returns `["[1, 2, 3,]", "[1, 2, 3,]"]` instead of `[1, 2, 3]`
-2. **Object Parsing**: `{"key": "value",}` returns as string instead of `{key: "value"}`
-3. **String Schema Handling**: Quoted strings losing quotes when targeting string schemas
-4. **Multiple Object Parsing**: Multiple JSON objects not being parsed as arrays correctly
+8. **Fixed Triple-Quoted Strings** ✅
+   - Restored triple-quoted string support (`"""content"""`)
+   - Proper dedenting of multiline content
+   - Matches Rust `fixing_parser` implementation
 
-### **Root Cause**
-- **Core Issue**: `findAllJSONObjects` method finds malformed JSON correctly but disables `allowMalformed` in recursive calls
-- **Impact**: Prevents iterative parser from processing malformed JSON, causing fallback to string parsing
-- **Solution Ready**: Clear fix identified and tested
+## 🔴 Remaining Failures (3 tests)
 
-## ✅ **RESOLVED ISSUES** (Previously Critical, Now Fixed)
+### 1. **Localization with Optional Fields** 🔴
+- **Issue**: Complex text with embedded JSON array containing objects with optional fields
+- **Root Cause**: `findAllJSONObjects` finds empty object `{player_name}` and the main array separately
+- **Current Behavior**: Returns wrapped results instead of the parsed array
+- **Fix Needed**: Better filtering of meaningful vs placeholder JSON objects
 
-### 1. **~~Iterative Parser String Termination Bug~~** ✅ **FIXED**
-**Solution**: Character consumption logic now matches Rust implementation exactly
-- **Fixed**: `shouldCloseUnquotedString()` cases 0,2,3,4 consume characters while scanning for delimiters
-- **Result**: `{key: "value"}` now correctly parses "key" instead of "ke"
-- **Impact**: Unquoted key parsing scenarios now work correctly
+### 2. **Complex Nested Object with Triple Quotes** 🔴
+- **Issue**: Deeply nested object with triple-quoted strings
+- **Complexity**: Mix of regular strings, triple quotes, and nested structures
+- **Fix Needed**: Enhanced handling of complex nesting scenarios
 
-### 2. **~~Array Parsing Issues~~** ✅ **FIXED**  
-**Solution**: Fixed delimiter consumption and immediate closure checking
-- **Fixed**: `[1, 2, 3,]` now parses as array `[1, 2, 3]` instead of single string
-- **Fixed**: Trailing comma arrays work correctly
-- **Impact**: All basic array scenarios now work
+### 3. **Complex Malformed JSON Sequence** 🔴
+- **Issue**: Multiple malformed JSON fragments in sequence
+- **Complexity**: Requires sophisticated recovery and merging logic
+- **Fix Needed**: Better coordination between parsing strategies
 
-### 3. **~~Infinite Recursion~~** ✅ **FIXED**
-**Solution**: Fixed recursive parser options in `findAllJSONObjects`
-- **Fixed**: Recursive calls now limit strategy options to prevent loops
-- **Result**: Fast execution, depth limit no longer hit
-- **Impact**: Parser runs efficiently on all inputs
+## 🏗️ Architecture Status
 
-## 🟡 Remaining Areas for Enhancement
+### **Core Components** ✅
+- `Value` type system with all variants implemented
+- `CompletionState` tracking for streaming support
+- Multi-strategy parsing engine with proper fallbacks
+- Schema-aware type coercion via Zod integration
 
-### 1. **String Parsing Edge Cases** 🟡 MEDIUM PRIORITY
-- Some complex string format expectations vs parsing results
-- Quoted vs unquoted string handling in specific contexts
-- Quote preservation preferences in different scenarios
+### **Parsing Strategies** (In Order)
+1. **Standard JSON** ✅ - Direct JSON.parse() for valid JSON
+2. **Markdown Extraction** ✅ - Extract from ```json blocks
+3. **Find All JSON Objects** ⚠️ - Works but needs filtering improvements
+4. **Iterative Parser** ✅ - Handles malformed JSON with state machine
+5. **String Fallback** ✅ - Returns original input when all else fails
 
-### 2. **Advanced Type Coercion** 🟡 MEDIUM PRIORITY  
-- Complex union type resolution edge cases
-- Nested object coercion scenarios
-- Advanced constraint handling
+### **Key Implementation Differences from Rust**
+1. TypeScript uses `any_of` type differently than Rust's `AnyOf`
+2. Wrapping behavior simplified to array-based approach
+3. Some edge cases in multi-object handling need refinement
 
-### 3. **Specialized Parsing Features** 🟡 LOW PRIORITY
-- Code block parsing refinements
-- Advanced markdown extraction edge cases
-- Specific formatting requirements for complex schemas
+## 📋 Next Session Action Plan
 
-## 🎯 Immediate Action Plan
+### **Immediate Fixes** (30 minutes)
+1. **Fix Empty Object Filtering**
+   - Add heuristic to skip placeholder objects like `{player_name}`
+   - Consider object size and content meaningfulness
+   
+2. **Improve Multi-Result Selection**
+   - Prefer arrays containing objects over wrapped results
+   - Better heuristic for choosing between multiple valid parses
 
-### **🚨 CRITICAL FIX NEEDED (Next Session - 30 minutes)**
+3. **Complex Nesting Support**
+   - Enhance triple-quote handling in nested contexts
+   - Better state management for deeply nested structures
 
-#### **Step 1: Fix Core Parser Recursive Options** (10 minutes)
-```typescript
-// File: src/core-parser.ts, method: findAllJSONObjects
-// CHANGE THIS:
-const nextOptions = {
-    ...options,
-    depth: options.depth + 1,
-    allowMalformed: false, // ❌ PROBLEM: Prevents iterative parser
-    extractFromMarkdown: false
-}
-
-// TO THIS:
-const nextOptions = {
-    ...options,
-    depth: options.depth + 1,
-    extractFromMarkdown: false // ✅ Keep allowMalformed: true
-}
-```
-
-#### **Step 2: Test Basic Malformed JSON** (10 minutes)
+### **Testing Strategy**
 ```bash
-# Should immediately fix these cases:
-bun test test/basics.test.ts -t "trailing comma"
-bun test test/basics.test.ts -t "object with trailing comma"
-```
+# Run specific failing tests
+bun test test/basics.test.ts -t "localization with optional fields"
+bun test test/basics.test.ts -t "complex nested object" 
+bun test test/basics.test.ts -t "complex malformed JSON"
 
-#### **Step 3: Fix String Schema Preference** (10 minutes)
-- Update schema-aware parsing to prefer original strings for string schemas
-- Test: `"hello"` with string schema should return `"hello"`, not `hello`
-
-### **Expected Immediate Improvements (Still Far From Production-Ready)**
-- **Current `basics.test.ts`**: 40/67 tests (59.7%) - **FAILING 27 tests**
-- **Target After Fix**: 50-55/67 tests (75-82%) - **Still failing 12-17 tests**
-- **Overall Suite**: Should improve from 47.8% to 52-55% - **Still failing ~200 tests**
-- **Production Goal**: 412/412 tests (100%) - **Significant additional work required**
-
-## 💡 Key Technical Insights Learned
-
-### **Critical Implementation Discoveries**
-1. **Character Consumption Pattern**: The Rust implementation consumes non-delimiter characters while scanning - this was the key missing piece
-2. **Position-Based Logic**: Cases 0,2,3,4 in `shouldCloseUnquotedString` have distinct character consumption patterns
-3. **Strategy Ordering**: Parser strategy order and recursive options are crucial for preventing infinite loops
-4. **Immediate Closure Checking**: Starting unquoted strings need immediate closure checking (unlike initial assumption)
-
-### **Architecture Validation**
-1. **Multi-Strategy Success**: The layered parsing approach (standard → markdown → object detection → malformed → iterative) works excellently
-2. **Value System Design**: Intermediate `Value` representation handles complex parsing scenarios perfectly
-3. **Zod Integration**: Schema-aware parsing provides significant value for real-world use cases
-
-### **Performance Insights**
-1. **Rust Pattern Matching**: Following Rust implementation patterns exactly yields correct behavior
-2. **Character-by-Character Processing**: Complex but necessary for malformed JSON scenarios
-3. **Strategy Optimization**: Early-exit and limited recursion prevent performance issues
-
-## 🏗️ Code Architecture Summary
-
-### **Core Files Status**
-- `src/value.ts` - Value types, CompletionState, utilities ✅ **COMPLETE & WORKING**
-- `src/core-parser.ts` - Multi-strategy parsing engine ✅ **COMPLETE & WORKING**
-- `src/parser.ts` - Schema-aware facade with enum extraction ✅ **COMPLETE & WORKING**  
-- `src/iterative-parser.ts` - Advanced state machine parser ✅ **NOW WORKING CORRECTLY**
-
-### **Key Technical Components**
-- `CoreParser.parse()` - Main parsing orchestration - **working perfectly**
-- `SchemaAwareJsonishParser.parse()` - Public API with schema validation - **working**
-- `IterativeParser.parse()` - Complex malformed JSON recovery - **now follows Rust exactly**
-- `shouldCloseUnquotedString()` - Character consumption logic - **fixed to match Rust**
-
-### **Integration Points Working**
-- Zod schemas drive type coercion decisions ✅
-- Multiple `Value` results combined via `any_of` type ✅
-- CompletionState tracks streaming/partial parsing status ✅
-- Character consumption matches Rust implementation ✅
-
-## 🚀 Continuation Strategy
-
-### **For Next Session - Focus Areas**
-1. **String Parsing Polish**: Address remaining string format edge cases
-2. **Type Coercion Refinement**: Improve complex type conversion scenarios  
-3. **Performance Optimization**: Add optimizations for large-scale usage
-4. **Test Coverage Expansion**: Target specific failing test patterns
-
-### **Recommended Approach**
-1. Run full test suite to identify highest-impact remaining issues
-2. Focus on string parsing expectations vs results (most remaining failures)
-3. Analyze type coercion mismatches for schema-aware improvements
-4. Incremental improvements to push past 60% pass rate
-
-### **Success Metrics**
-- **Current**: 220/412 tests (53.4% pass rate) ✅ **ACHIEVED**
-- **Next Target**: 250+ tests (60%+ pass rate)
-- **Stretch Goal**: 300+ tests (70%+ pass rate)
-- **Quality Goal**: All core JSON/array/object scenarios working perfectly ✅ **ACHIEVED**
-
-## 📋 Quick Start Commands for Next Session
-
-```bash
-# Check current overall status
-bun test test/ 2>&1 | tail -5
-
-# we don't want to test the tests under baml/
-
-# Check current basics.test.ts status  
-bun test test/basics.test.ts 2>&1 | tail -5
-
-# Test specific failing cases
-bun test test/basics.test.ts -t "trailing comma" 2>&1
-bun test test/basics.test.ts -t "quoted string" 2>&1
-
-# Debug core parser directly
+# Debug with direct parser calls
 bun -e "
-import { CoreParser } from './src/core-parser.ts'
-const parser = new CoreParser()
-console.log('Result:', JSON.stringify(parser.parse('[1,2,3,]', {allowMalformed:true}), null, 2))
+import { SchemaAwareJsonishParser } from './src/parser.ts'
+const parser = new SchemaAwareJsonishParser()
+// Test specific inputs
 "
 ```
 
+## 💡 Key Insights from This Session
+
+1. **Rust Pattern Matching**: Following Rust's exact patterns (like `all_finding_all_json_objects`) is crucial
+2. **Wrapping Behavior**: The [parsed_result, original_string] pattern is used extensively
+3. **Schema-Aware Selection**: The parser provides multiple options, schema layer picks the best
+4. **Edge Case Handling**: Small details like case sensitivity and whitespace matter significantly
+
+## 🎯 Path to Production
+
+### **Current Status**: 95.5% on basics.test.ts
+- **Next Milestone**: 100% on basics.test.ts (3 tests remaining)
+- **Then**: Move to next test file (likely class or enum tests)
+- **Goal**: Systematic progression through all 43 test files
+
+### **Estimated Timeline**
+- **Basics Completion**: 1 more session (30-60 minutes)
+- **Core Test Suite**: 5-10 more sessions
+- **Full Production Ready**: 15-20 total sessions
+
 ---
 
-**Current Status**: 🚨 **NOT PRODUCTION-READY - ACTIVE DEVELOPMENT** 
-- **Overall**: 197/412 tests (47.8% pass rate) - **FAILING 215 tests**
-- **Focus**: 40/67 tests in basics.test.ts (59.7% pass rate) - **FAILING 27 basic tests**
-- **TDD Goal**: Must achieve 412/412 tests (100% pass rate) for production readiness
-- **Next**: Fix `findAllJSONObjects` recursive options to enable iterative parser for malformed JSON 
+**Session Summary**: Massive progress! Fixed 24 tests, bringing us from 59.7% to 95.5% pass rate. Core parsing logic is solid, just need to handle some complex edge cases around multi-object parsing and nested structures. 

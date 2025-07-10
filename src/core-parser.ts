@@ -23,9 +23,6 @@ export class CoreParser {
     }
 
     private parseInternal(input: string, options: InternalParseOptions, isDone: boolean): Value {
-        console.log(`[DEBUG] Parsing with options:`, options)
-        console.log(`[DEBUG] Input (first 100 chars):`, input.substring(0, 100))
-
         // Prevent infinite recursion
         if (options.depth > 10) {
             throw new Error('Max recursion depth reached')
@@ -35,23 +32,17 @@ export class CoreParser {
         try {
             const parsed = JSON.parse(input)
             const value = this.fromJSONValue(parsed)
-            console.log(`[DEBUG] Standard JSON parse successful:`, value)
             return value // Return directly, not wrapped in any_of for standard JSON
-        } catch (e) {
-            console.log(`[DEBUG] Standard JSON parse failed:`, e instanceof Error ? e.message : e)
-        }
+        } catch (e) {}
 
         // Strategy 2: Try markdown JSON extraction (if enabled)
         if (options.extractFromMarkdown) {
             try {
                 const markdownResults = this.parseMarkdownBlocks(input, options)
                 if (markdownResults.length > 0) {
-                    console.log(`[DEBUG] Markdown extraction successful:`, markdownResults.length, 'results')
                     return this.handleMultipleResults(markdownResults, input)
                 }
-            } catch (e) {
-                console.log(`[DEBUG] Markdown extraction failed:`, e instanceof Error ? e.message : e)
-            }
+            } catch (e) {}
         }
 
         // Strategy 3: Try finding all JSON objects (if enabled)
@@ -59,18 +50,14 @@ export class CoreParser {
             try {
                 const jsonObjects = this.findAllJSONObjects(input, options)
                 if (jsonObjects.length > 0) {
-                    console.log(`[DEBUG] JSON object extraction successful:`, jsonObjects.length, 'objects')
                     return this.handleMultipleResults(jsonObjects, input)
                 }
-            } catch (e) {
-                console.log(`[DEBUG] JSON object extraction failed:`, e instanceof Error ? e.message : e)
-            }
+            } catch (e) {}
         }
 
         // Strategy 4: Try iterative parser (try_fix_jsonish equivalent) - the main malformed JSON handler
         if (options.allowMalformed) {
             try {
-                console.log(`[DEBUG] Trying iterative parser for malformed JSON`)
                 const iterativeParser = new IterativeParser()
                 const iterativeResult = iterativeParser.parse(input)
 
@@ -87,15 +74,11 @@ export class CoreParser {
                     ],
                     completionState: CompletionState.Complete
                 }
-                console.log(`[DEBUG] Iterative parser successful:`, iterativeResult)
                 return arrayResult
-            } catch (e) {
-                console.log(`[DEBUG] Iterative parser failed:`, e instanceof Error ? e.message : e)
-            }
+            } catch (e) {}
         }
 
         // Strategy 5: Return as string if allowed (matches Rust allow_as_string)
-        console.log(`[DEBUG] Falling back to string parsing`)
         return {
             type: 'string',
             value: input,
@@ -168,9 +151,7 @@ export class CoreParser {
                         value: parsed,
                         completionState: ValueUtils.getCompletionState(parsed)
                     })
-                } catch (e) {
-                    console.log(`[DEBUG] Failed to parse markdown block:`, e)
-                }
+                } catch (e) {}
             }
             match = markdownRegex.exec(input)
         }
@@ -211,9 +192,7 @@ export class CoreParser {
                         }
                         const parsed = this.parseInternal(jsonStr, nextOptions, false)
                         results.push(parsed)
-                    } catch (e) {
-                        console.log(`[DEBUG] Failed to parse extracted JSON:`, e)
-                    }
+                    } catch (e) {}
                 }
             }
         }
