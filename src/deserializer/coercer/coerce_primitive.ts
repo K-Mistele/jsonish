@@ -26,12 +26,25 @@ export function coerceString(
       }
       return result
     }
-    case 'null':
-      return ctx.errorUnexpectedNull(target)
-    default: {
+    case 'number': {
       const flags = new DeserializerConditions()
       flags.addFlag(Flag.JsonToString, { value })
-      return createString(value.toString(), target, flags)
+      return createString(value.value.toString(), target, flags)
+    }
+    case 'boolean': {
+      const flags = new DeserializerConditions()
+      flags.addFlag(Flag.JsonToString, { value })
+      return createString(value.value.toString(), target, flags)
+    }
+    case 'null':
+      return ctx.errorUnexpectedNull(target)
+    case 'array':
+      return coerceArrayToSingular(ctx, target, value.value, (v: Value) => coerceString(ctx, target, v))
+    default: {
+      // For other types (object, etc), convert to JSON string
+      const flags = new DeserializerConditions()
+      flags.addFlag(Flag.JsonToString, { value })
+      return createString(JSON.stringify(value), target, flags)
     }
   }
 }
@@ -189,33 +202,55 @@ export function coerceBool(
       result = createBool(value.value, target)
       break
     case 'string': {
-      const s = value.value.toLowerCase()
-      if (s === 'true') {
+      const s = value.value.trim()
+      const lower = s.toLowerCase()
+      
+      // Direct matches
+      if (lower === 'true') {
         const flags = new DeserializerConditions()
         flags.addFlag(Flag.StringToBool, { original: value.value })
         result = createBool(true, target, flags)
-      } else if (s === 'false') {
+      } else if (lower === 'false') {
         const flags = new DeserializerConditions()
         flags.addFlag(Flag.StringToBool, { original: value.value })
         result = createBool(false, target, flags)
       } else {
-        // Try fuzzy matching
-        const candidates: Array<[string, string[]]> = [
-          ['true', ['true', 'True', 'TRUE']],
-          ['false', ['false', 'False', 'FALSE']]
-        ]
+        // Try to extract boolean from text
+        const hasTruePattern = /\btrue\b/i.test(s)
+        const hasFalsePattern = /\bfalse\b/i.test(s)
         
-        // This would use match_string module, but for now let's do simple matching
-        const matchResult = candidates.find(([_, variations]) => 
-          variations.includes(value.value)
-        )
-        
-        if (matchResult) {
+        // Check if both patterns exist - this is ambiguous
+        if (hasTruePattern && hasFalsePattern) {
+          result = ctx.errorInternal(
+            `Ambiguous boolean value: "${s}" contains both true and false`
+          )
+        } else if (hasTruePattern) {
           const flags = new DeserializerConditions()
           flags.addFlag(Flag.StringToBool, { original: value.value })
-          result = createBool(matchResult[0] === 'true', target, flags)
+          result = createBool(true, target, flags)
+        } else if (hasFalsePattern) {
+          const flags = new DeserializerConditions()
+          flags.addFlag(Flag.StringToBool, { original: value.value })
+          result = createBool(false, target, flags)
         } else {
-          result = ctx.errorUnexpectedType(target, value)
+          // Check for other boolean-like patterns
+          const truePatterns = ['yes', 'y', '1', 'on', 'enabled']
+          const falsePatterns = ['no', 'n', '0', 'off', 'disabled']
+          
+          const foundTrue = truePatterns.some(pattern => lower === pattern)
+          const foundFalse = falsePatterns.some(pattern => lower === pattern)
+          
+          if (foundTrue) {
+            const flags = new DeserializerConditions()
+            flags.addFlag(Flag.StringToBool, { original: value.value })
+            result = createBool(true, target, flags)
+          } else if (foundFalse) {
+            const flags = new DeserializerConditions()
+            flags.addFlag(Flag.StringToBool, { original: value.value })
+            result = createBool(false, target, flags)
+          } else {
+            result = ctx.errorUnexpectedType(target, value)
+          }
         }
       }
       break
@@ -284,12 +319,18 @@ function floatFromCommaSeparated(value: string): number | null {
     }
   }
   
+  // Check if this looks like a fraction (contains /)
+  if (value.includes('/')) {
+    return null // Let fraction parser handle it
+  }
+  
   // Try to extract number from text using regex
-  const regex = /[-+]?\$?(?:\d+(?:,\d+)*(?:\.\d+)?|\d+\.\d+|\d+|\.\d+)(?:e[-+]?\d+)?/
+  // This regex matches numbers at the beginning of text or after whitespace
+  const regex = /(?:^|[\s])([-+]?\$?(?:\d+(?:,\d+)*(?:\.\d+)?|\d+\.\d+|\d+|\.\d+)(?:e[-+]?\d+)?)/
   const match = value.match(regex)
   
-  if (match && match[0] === value.trim()) {  // Only accept if the match is the entire string
-    const numberStr = match[0]
+  if (match) {
+    const numberStr = match[1]
     const withoutCurrency = numberStr.replace(/^\$/, '')
     const withoutCommas = withoutCurrency.replace(/,/g, '')
     const extracted = parseFloat(withoutCommas)

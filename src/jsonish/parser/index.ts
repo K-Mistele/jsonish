@@ -19,7 +19,6 @@ import { z } from 'zod'
 import type { Value } from '../value'
 import { type ParseOptions, defaultParseOptions, parse } from './entry'
 import { deserialize, ParsingError } from '../../deserializer'
-import { toPlainValue } from '../../deserializer/types'
 
 // Legacy parser interface for backward compatibility with tests
 export interface JsonishParser {
@@ -51,11 +50,8 @@ export function createParser(options: ParseOptions = defaultParseOptions): Jsoni
                 throw new Error(deserializedResult.toString())
             }
 
-            // Convert to plain JavaScript value
-            const plainValue = toPlainValue(deserializedResult)
-
-            // Validate against schema and return
-            return schema.parse(plainValue) as T
+            // The deserializer now returns the typed value directly
+            return deserializedResult
         }
     }
 }
