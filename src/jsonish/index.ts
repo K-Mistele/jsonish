@@ -1,5 +1,7 @@
-// Main parsing API - mirrors the exports from Rust jsonish/mod.rs
+// Mirrors Rust jsonish/src/jsonish/mod.rs
+
+// Parser exports
 export { parse, type ParseOptions } from './parser/entry'
 
-// Core types - mirrors the exports from Rust value.rs
-export { CompletionState, Fixes, type Value } from '../value'
+// Value exports
+export { Fixes, Value } from './value'

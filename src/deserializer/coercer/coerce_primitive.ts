@@ -63,31 +63,33 @@ export function coerceInt(
     case 'string': {
       const s = value.value.trim().replace(/,$/g, '')
       
-      // Try parsing as integer
-      const parsedInt = parseInt(s, 10)
-      if (!isNaN(parsedInt) && parsedInt.toString() === s) {
-        result = createInt(parsedInt, target)
+      // First try comma-separated number parsing (to handle cases like "12,111")
+      const commaSeparated = floatFromCommaSeparated(s)
+      if (commaSeparated !== null) {
+        const flags = new DeserializerConditions()
+        if (!Number.isInteger(commaSeparated)) {
+          flags.addFlag(Flag.FloatToInt, { original: commaSeparated })
+        }
+        result = createInt(Math.round(commaSeparated), target, flags)
       } else {
-        // Try parsing as float and round
-        const parsedFloat = parseFloat(s)
-        if (!isNaN(parsedFloat)) {
+        // Try fraction parsing
+        const fraction = floatFromMaybeFraction(s)
+        if (fraction !== null) {
           const flags = new DeserializerConditions()
-          flags.addFlag(Flag.FloatToInt, { original: parsedFloat })
-          result = createInt(Math.round(parsedFloat), target, flags)
+          flags.addFlag(Flag.FloatToInt, { original: fraction })
+          result = createInt(Math.round(fraction), target, flags)
         } else {
-          // Try fraction parsing
-          const fraction = floatFromMaybeFraction(s)
-          if (fraction !== null) {
-            const flags = new DeserializerConditions()
-            flags.addFlag(Flag.FloatToInt, { original: fraction })
-            result = createInt(Math.round(fraction), target, flags)
+          // Try standard integer parsing
+          const parsedInt = parseInt(s, 10)
+          if (!isNaN(parsedInt) && parsedInt.toString() === s) {
+            result = createInt(parsedInt, target)
           } else {
-            // Try comma-separated number parsing
-            const commaSeparated = floatFromCommaSeparated(s)
-            if (commaSeparated !== null) {
+            // Try parsing as float and round
+            const parsedFloat = parseFloat(s)
+            if (!isNaN(parsedFloat) && parsedFloat.toString() === s) {
               const flags = new DeserializerConditions()
-              flags.addFlag(Flag.FloatToInt, { original: commaSeparated })
-              result = createInt(Math.round(commaSeparated), target, flags)
+              flags.addFlag(Flag.FloatToInt, { original: parsedFloat })
+              result = createInt(Math.round(parsedFloat), target, flags)
             } else {
               result = ctx.errorUnexpectedType(target, value)
             }
@@ -130,22 +132,24 @@ export function coerceFloat(
     case 'string': {
       const s = value.value.trim().replace(/,$/g, '')
       
-      // Try parsing as float
-      const parsedFloat = parseFloat(s)
-      if (!isNaN(parsedFloat)) {
-        result = createFloat(parsedFloat, target)
+      // First try comma-separated number parsing (to handle cases like "12,111")
+      const commaSeparated = floatFromCommaSeparated(s)
+      if (commaSeparated !== null) {
+        const flags = new DeserializerConditions()
+        if (s !== commaSeparated.toString()) {
+          flags.addFlag(Flag.StringToFloat, { original: s })
+        }
+        result = createFloat(commaSeparated, target, flags)
       } else {
         // Try fraction parsing
         const fraction = floatFromMaybeFraction(s)
         if (fraction !== null) {
           result = createFloat(fraction, target)
         } else {
-          // Try comma-separated number parsing
-          const commaSeparated = floatFromCommaSeparated(s)
-          if (commaSeparated !== null) {
-            const flags = new DeserializerConditions()
-            flags.addFlag(Flag.StringToFloat, { original: s })
-            result = createFloat(commaSeparated, target, flags)
+          // Try standard parsing as last resort
+          const parsedFloat = parseFloat(s)
+          if (!isNaN(parsedFloat) && parsedFloat.toString() === s) {
+            result = createFloat(parsedFloat, target)
           } else {
             result = ctx.errorUnexpectedType(target, value)
           }
@@ -263,15 +267,37 @@ function floatFromMaybeFraction(value: string): number | null {
 
 // Helper function to parse comma-separated numbers
 function floatFromCommaSeparated(value: string): number | null {
-  // Match numbers with optional commas, decimal points, currency symbols, etc.
-  const regex = /^([-+]?)\$?(?:\d+(?:,\d+)*(?:\.\d+)?|\d+\.\d+|\d+|\.\d+)(?:e[-+]?\d+)?$/
-  const match = value.match(regex)
-  
-  if (!match) return null
+  // Remove trailing dots and commas
+  let cleaned = value.trim().replace(/[,.]$/g, '')
   
   // Remove commas and currency symbols
-  const cleanedValue = value.replace(/[$,]/g, '')
-  const parsed = parseFloat(cleanedValue)
+  cleaned = cleaned.replace(/[$,]/g, '')
   
-  return isNaN(parsed) ? null : parsed
+  // Check if the cleaned value is a valid number representation
+  // This regex matches valid number formats (including decimals and scientific notation)
+  const validNumberRegex = /^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/
+  
+  if (validNumberRegex.test(cleaned)) {
+    const parsed = parseFloat(cleaned)
+    if (!isNaN(parsed)) {
+      return parsed
+    }
+  }
+  
+  // Try to extract number from text using regex
+  const regex = /[-+]?\$?(?:\d+(?:,\d+)*(?:\.\d+)?|\d+\.\d+|\d+|\.\d+)(?:e[-+]?\d+)?/
+  const match = value.match(regex)
+  
+  if (match && match[0] === value.trim()) {  // Only accept if the match is the entire string
+    const numberStr = match[0]
+    const withoutCurrency = numberStr.replace(/^\$/, '')
+    const withoutCommas = withoutCurrency.replace(/,/g, '')
+    const extracted = parseFloat(withoutCommas)
+    
+    if (!isNaN(extracted)) {
+      return extracted
+    }
+  }
+  
+  return null
 }

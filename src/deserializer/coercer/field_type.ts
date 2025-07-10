@@ -2,6 +2,7 @@
 
 import { z } from 'zod'
 import type { Value } from '../../jsonish/value'
+import { CompletionState } from '../../jsonish/value'
 import { ParsingContext, ParsingError, TypeCoercer, DefaultValue } from './index'
 import type { BamlValueWithFlags } from '../types'
 import { 
@@ -39,6 +40,51 @@ export class FieldTypeCoercer implements TypeCoercer, DefaultValue {
     target: z.ZodSchema,
     value: Value | undefined
   ): BamlValueWithFlags | ParsingError {
+    // Handle special wrapper types from the parser
+    if (value) {
+      // Handle any_of values - try each choice until one works
+      if (value.type === 'any_of') {
+        const { choices, originalString } = value
+        
+        // If target expects a string, prefer the original string
+        if (target instanceof z.ZodString || target instanceof z.ZodEnum || target instanceof z.ZodLiteral) {
+          // Create a string value from originalString
+          const stringValue: Value = { 
+            type: 'string', 
+            value: originalString, 
+            completionState: CompletionState.Complete 
+          }
+          return this.coerce(ctx, target, stringValue)
+        }
+        
+        // Try each choice
+        for (const choice of choices) {
+          const result = this.coerce(ctx, target, choice)
+          if (!(result instanceof ParsingError)) {
+            return result
+          }
+        }
+        
+        // Fallback to original string
+        const stringValue: Value = { 
+          type: 'string', 
+          value: originalString, 
+          completionState: CompletionState.Complete 
+        }
+        return this.coerce(ctx, target, stringValue)
+      }
+      
+      // Handle markdown wrapper - unwrap and process the inner value
+      if (value.type === 'markdown') {
+        return this.coerce(ctx, target, value.value)
+      }
+      
+      // Handle fixed_json wrapper - unwrap and process the inner value
+      if (value.type === 'fixed_json') {
+        return this.coerce(ctx, target, value.value)
+      }
+    }
+
     // Handle optional types
     if (target instanceof z.ZodOptional) {
       if (!value || value.type === 'null') {
@@ -146,10 +192,10 @@ export class FieldTypeCoercer implements TypeCoercer, DefaultValue {
       return { type: 'null' }
     }
     if (typeof val === 'string') {
-      return { type: 'string', value: val, completionState: 'complete' as any }
+      return { type: 'string', value: val, completionState: CompletionState.Complete }
     }
     if (typeof val === 'number') {
-      return { type: 'number', value: val, completionState: 'complete' as any }
+      return { type: 'number', value: val, completionState: CompletionState.Complete }
     }
     if (typeof val === 'boolean') {
       return { type: 'boolean', value: val }
@@ -158,7 +204,7 @@ export class FieldTypeCoercer implements TypeCoercer, DefaultValue {
       return {
         type: 'array',
         value: val.map(v => this.jsToValue(v)!).filter(v => v !== undefined),
-        completionState: 'complete' as any
+        completionState: CompletionState.Complete
       }
     }
     if (typeof val === 'object') {
@@ -172,7 +218,7 @@ export class FieldTypeCoercer implements TypeCoercer, DefaultValue {
       return {
         type: 'object',
         value: entries,
-        completionState: 'complete' as any
+        completionState: CompletionState.Complete
       }
     }
     return undefined
@@ -202,6 +248,18 @@ export class FieldTypeCoercer implements TypeCoercer, DefaultValue {
           map.set(k, [new DeserializerConditions(), this.valueToBAMLValue(v, z.any())])
         }
         return createMap(map, target)
+      case 'any_of':
+        // For any_of, try to convert the first choice or fallback to string
+        if (value.choices.length > 0) {
+          return this.valueToBAMLValue(value.choices[0], target)
+        }
+        return createString(value.originalString, target)
+      case 'markdown':
+        // For markdown, unwrap and convert the inner value
+        return this.valueToBAMLValue(value.value, target)
+      case 'fixed_json':
+        // For fixed_json, unwrap and convert the inner value
+        return this.valueToBAMLValue(value.value, target)
       default:
         // For other types, convert to string
         return createString(JSON.stringify(value), target)
