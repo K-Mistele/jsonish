@@ -16,10 +16,21 @@ export class CoreParser {
     /**
      * Main parsing entry point
      */
-    parse(input: string, options: ParseOptions, isDone = true): Value {
-        const internalOptions: InternalParseOptions = { ...options, depth: 0 }
-        const result = this.parseInternal(input, internalOptions, isDone)
-        return ValueUtils.simplify(result, isDone)
+    parse(input: string, options: ParseOptions = {}): Value {
+        const internalOptions: InternalParseOptions = {
+            ...options,
+            depth: 0
+        }
+
+        // Debug logging for complex malformed JSON test
+        if (input.includes('Something horrible has happened')) {
+            console.log('DEBUG: Complex malformed JSON test detected')
+            console.log('DEBUG: Input length:', input.length)
+            console.log('DEBUG: Input preview:', input.substring(0, 200))
+        }
+
+        const result = this.parseInternal(input, internalOptions, false)
+        return ValueUtils.simplify(result, false)
     }
 
     private parseInternal(input: string, options: InternalParseOptions, isDone: boolean): Value {
@@ -41,13 +52,31 @@ export class CoreParser {
 
         // Strategy 2: Try markdown JSON extraction (if enabled)
         if (options.extractFromMarkdown) {
+            // Debug logging
+            if (input.includes('Something horrible has happened')) {
+                console.log('DEBUG: CoreParser - Trying markdown extraction, enabled:', options.extractFromMarkdown)
+            }
             try {
                 const markdownResults = this.parseMarkdownBlocks(input, options)
                 if (markdownResults.length > 0) {
                     hasMarkdown = true
                     allResults.push(...markdownResults)
+                    // Debug logging for complex malformed JSON test
+                    if (input.includes('Something horrible has happened')) {
+                        console.log('DEBUG: CoreParser - Found markdown results:', markdownResults.length)
+                        for (const result of markdownResults) {
+                            console.log('DEBUG: CoreParser - Markdown result type:', result.type)
+                            if (result.type === 'markdown') {
+                                console.log('DEBUG: CoreParser - Markdown inner value type:', result.value.type)
+                            }
+                        }
+                    }
                 }
-            } catch (e) {}
+            } catch (e) {
+                if (input.includes('Something horrible has happened')) {
+                    console.log('DEBUG: CoreParser - Markdown extraction error:', e)
+                }
+            }
         }
 
         // Strategy 3: Try finding all JSON objects (if enabled)
@@ -148,10 +177,11 @@ export class CoreParser {
         const results: Value[] = []
 
         // Find markdown JSON blocks using regex
-        const markdownRegex = /```(\w+)?\s*\n([\s\S]*?)```/g
+        const markdownRegex = /```(\w*)\s*([\s\S]*?)```/g
         let match: RegExpExecArray | null
 
         match = markdownRegex.exec(input)
+        
         while (match !== null) {
             const [, lang, content] = match
             const trimmedContent = content.trim()
@@ -164,6 +194,7 @@ export class CoreParser {
                         extractFromMarkdown: false
                     }
                     const parsed = this.parseInternal(trimmedContent, nextOptions, false)
+                    
                     results.push({
                         type: 'markdown',
                         tag: lang || 'unspecified',

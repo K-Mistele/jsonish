@@ -25,12 +25,20 @@ enum CloseStringResult {
 export class IterativeParser {
     private collectionStack: JsonCollection[] = []
     private completedValues: Array<{ name: string; value: Value }> = []
+    private input: string | null = null
 
     /**
      * Parse malformed JSON using state machine approach
      */
     parse(input: string): Value {
+        // Debug logging for complex malformed JSON test
+        if (input.includes('Something horrible has happened')) {
+            console.log('DEBUG: IterativeParser - Complex malformed JSON test detected')
+            console.log('DEBUG: IterativeParser - Input length:', input.length)
+        }
+
         this.reset()
+        this.input = input
 
         const chars = Array.from(input)
         let i = 0
@@ -48,15 +56,42 @@ export class IterativeParser {
             this.completeCollection(CompletionState.Incomplete)
         }
 
+        // Debug log the completed values
+        if (input.includes('Something horrible has happened')) {
+            console.log('DEBUG: IterativeParser - Completed values:', this.completedValues.length)
+            for (const item of this.completedValues) {
+                console.log(`DEBUG: IterativeParser - ${item.name}:`, item.value.type)
+                if (item.name === 'Object' && item.value.type === 'object') {
+                    console.log('DEBUG: IterativeParser - Final object structure:')
+                    for (const [key, val] of item.value.value) {
+                        console.log(`  ${key}:`, val.type)
+                        if (key === 'foo2' && val.type === 'object') {
+                            console.log('    foo2 object keys:', (val as any).value.map((kv: any) => kv[0]))
+                        }
+                    }
+                }
+            }
+        }
+
         return this.buildResult()
     }
 
     private reset(): void {
         this.collectionStack = []
         this.completedValues = []
+        this.input = null
     }
 
     private processToken(token: string, remaining: string[], position: number): number {
+        // Debug logging for complex malformed JSON test
+        if (this.collectionStack.length > 0 && this.input?.includes('Something horrible has happened')) {
+            const currentStack = this.collectionStack[this.collectionStack.length - 1]
+            if (currentStack.type === 'object' && currentStack.keys.length === 13 && currentStack.keys[12] === 'field13') {
+                console.log(`DEBUG: processToken - At field13, char: '${token}', remaining preview: '${remaining.slice(0, 10).join('')}'`)
+                console.log(`DEBUG: processToken - Current value for field13:`, currentStack.values.length > 12 ? currentStack.values[12] : 'no value yet')
+            }
+        }
+        
         const lastCollection = this.collectionStack[this.collectionStack.length - 1]
 
         if (!lastCollection) {
@@ -452,6 +487,15 @@ export class IterativeParser {
         const collection = this.collectionStack.pop()
         if (!collection) return
 
+        // Debug logging for complex malformed JSON test
+        if (this.input?.includes('Something horrible has happened') && collection.type === 'object') {
+            console.log('DEBUG: completeCollection - Object with keys:', collection.keys)
+            if (collection.keys.includes('field13')) {
+                const idx = collection.keys.indexOf('field13')
+                console.log('DEBUG: completeCollection - field13 value:', collection.values[idx])
+            }
+        }
+
         const value = this.collectionToValue(collection, completionState)
         if (!value) return
 
@@ -642,6 +686,14 @@ export class IterativeParser {
     }
 
     private buildResult(): Value {
+        // Debug logging for complex malformed JSON test
+        if (this.completedValues.some(v => JSON.stringify(v.value).includes('Something horrible has happened'))) {
+            console.log('DEBUG: buildResult - completed values:')
+            for (const item of this.completedValues) {
+                console.log(`  ${item.name}:`, JSON.stringify(item.value).substring(0, 200))
+            }
+        }
+
         if (this.completedValues.length === 0) {
             throw new Error('No JSON objects found')
         }
@@ -650,8 +702,8 @@ export class IterativeParser {
             return this.completedValues[0].value
         }
 
-        // Multiple values - check if all are strings (lowercase check matches Rust)
-        if (this.completedValues.every((v) => v.name === 'string')) {
+        // Multiple values - check if all are strings
+        if (this.completedValues.every((v) => v.name === 'UnquotedString' || v.name === 'String')) {
             return {
                 type: 'array',
                 value: this.completedValues.map((v) => v.value),
@@ -659,21 +711,21 @@ export class IterativeParser {
             }
         }
 
-        // Filter for only objects and arrays
-        const objectsAndArrays = this.completedValues.filter((v) => v.name === 'Object' || v.name === 'Array')
+        // Filter for objects and arrays only
+        const structuredValues = this.completedValues.filter((v) => v.name === 'Object' || v.name === 'Array')
 
-        if (objectsAndArrays.length === 0) {
+        if (structuredValues.length === 0) {
             throw new Error('No JSON objects found')
         }
 
-        if (objectsAndArrays.length === 1) {
-            return objectsAndArrays[0].value
+        if (structuredValues.length === 1) {
+            return structuredValues[0].value
         }
 
-        // Return filtered values as an array
+        // Multiple structured values
         return {
             type: 'array',
-            value: objectsAndArrays.map((v) => v.value),
+            value: structuredValues.map((v) => v.value),
             completionState: CompletionState.Incomplete
         }
     }
