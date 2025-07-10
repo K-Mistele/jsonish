@@ -53,29 +53,24 @@ export const DEFAULT_PARSE_OPTIONS: ParseOptions = {
  */
 export class SchemaAwareJsonishParser implements JsonishParser {
     parse<T>(input: string, schema: z.ZodSchema<T>, options: ParseOptions = DEFAULT_PARSE_OPTIONS): T {
-        // Special handling for string schemas - prefer original input
-        if (this.getSchemaType(schema) === 'string') {
-            try {
-                // Check if input is valid JSON (would parse as object/array)
-                const testParse = JSON.parse(input)
-                if (typeof testParse === 'object' && testParse !== null) {
-                    // It's valid JSON object/array, but schema wants string
-                    // Return the original input as string
-                    const result = schema.parse(input)
-                    return result
-                }
-            } catch (e) {
-                // Not valid JSON, check if it's an incomplete quoted string
-                const trimmed = input.trim()
-                if (
-                    (trimmed.startsWith('"') && !trimmed.endsWith('"')) ||
-                    (trimmed.startsWith("'") && !trimmed.endsWith("'"))
-                ) {
-                    // Incomplete quoted string - return original
-                    const result = schema.parse(input)
-                    return result
-                }
-                // Continue with normal parsing
+        // CRITICAL: String schema priority check - matches Rust implementation in lib.rs
+        // If schema expects a string, return the input string directly without parsing
+        // BUT: Handle special cases for nullable schemas
+        const schemaType = this.getSchemaType(schema)
+
+        if (schemaType === 'string') {
+            const result = schema.parse(input)
+            return result
+        }
+
+        if (schemaType === 'nullable_string') {
+            // For nullable string, if input is "null", let it parse normally
+            if (input.trim() === 'null') {
+                // Fall through to normal parsing to handle null
+            } else {
+                // Otherwise, treat as string
+                const result = schema.parse(input)
+                return result
             }
         }
 
@@ -106,78 +101,32 @@ export class SchemaAwareJsonishParser implements JsonishParser {
         options: ParseOptions,
         originalInput?: string
     ): any {
-        // Temporary debug log
-        if (value.type === 'array' && this.getSchemaType(schema) === 'array') {
-        }
-
-        // Handle string schema preference for quoted strings
-        if (this.getSchemaType(schema) === 'string' && originalInput) {
-            const trimmed = originalInput.trim()
-            // If the input is a quoted string and we successfully parsed it, return the original
-            if (
-                (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-                (trimmed.startsWith("'") && trimmed.endsWith("'"))
-            ) {
-                if (value.type === 'string') {
-                    return originalInput
-                }
-            }
-        }
-
-        // Handle AnyOf by trying each choice - prefer string for string schemas
         if (value.type === 'any_of') {
+            const { choices, originalString } = value
             const schemaType = this.getSchemaType(schema)
 
-            // For non-string schemas, try parsing choices first (to extract numbers/booleans from text)
-            if (schemaType !== 'string') {
-                // Try each parsed choice first
-                for (const choice of value.choices) {
-                    try {
-                        const converted = this.valueToPlainObject(choice, schema, options, originalInput)
-                        const validated = schema.safeParse(converted)
-                        if (validated.success) {
-                            return converted
-                        }
-                    } catch (e) {
-                        // Continue to next choice
-                    }
-                }
+            // Prioritize choices that match the expected schema type
+            const sortedChoices = [...choices].sort((a, b) => {
+                const aScore = this.getChoiceScore(a, schemaType)
+                const bScore = this.getChoiceScore(b, schemaType)
+                return bScore - aScore // Higher score first
+            })
 
-                // If no choice worked, try coercing the original string
-                return this.coerceToSchema(value.originalString, schema, options)
+            // Try each choice against the schema to find the best match
+            for (const choice of sortedChoices) {
+                try {
+                    const converted = this.valueToPlainObject(choice, schema, options, originalInput || originalString)
+                    const validated = schema.safeParse(converted)
+                    if (validated.success) {
+                        return converted
+                    }
+                } catch (e) {
+                    // Continue to next choice
+                }
             }
 
-            // For string schemas, prefer original string when it contains structured data
-            if (schemaType === 'string') {
-                // If original string contains JSON-like structure, prefer it
-                const hasStructuredContent = this.hasStructuredContent(value.originalString)
-                if (hasStructuredContent) {
-                    try {
-                        const validated = schema.safeParse(value.originalString)
-                        if (validated.success) {
-                            return value.originalString
-                        }
-                    } catch (e) {
-                        // Continue to other approaches
-                    }
-                }
-
-                // Otherwise, try parsed choices first (might extract better typed values)
-                for (const choice of value.choices) {
-                    try {
-                        const converted = this.valueToPlainObject(choice, schema, options, originalInput)
-                        const validated = schema.safeParse(converted)
-                        if (validated.success) {
-                            return converted
-                        }
-                    } catch (e) {
-                        // Continue to next choice
-                    }
-                }
-
-                // Finally, fall back to original string
-                return this.coerceToSchema(value.originalString, schema, options)
-            }
+            // Finally, fall back to original string
+            return this.coerceToSchema(originalString, schema, options)
         }
 
         // Handle other Value types
@@ -194,7 +143,14 @@ export class SchemaAwareJsonishParser implements JsonishParser {
                 // Check if this is a multi-result array (like from markdown extraction)
                 // where we need to pick the result that matches the schema
                 if (value.value.length > 1 && value.completionState === CompletionState.Incomplete) {
-                    // Try each value against the schema to find the best match
+                    // If schema expects array, use standard array processing
+                    const schemaInfo = this.getArraySchemaInfo(schema)
+                    if (schemaInfo) {
+                        // Schema expects array - convert each element using element schema
+                        return value.value.map((item) => this.valueToPlainObject(item, schemaInfo.element, options))
+                    }
+
+                    // Schema doesn't expect array - try each value against the schema to find the best match
                     for (const item of value.value) {
                         try {
                             const converted = this.valueToPlainObject(item, schema, options, originalInput)
@@ -327,8 +283,12 @@ export class SchemaAwareJsonishParser implements JsonishParser {
         if (schema instanceof z.ZodUnion) return 'union'
         if (schema instanceof z.ZodEnum) return 'enum'
         if (schema instanceof z.ZodLiteral) return 'literal'
+        if (schema instanceof z.ZodNullable) {
+            // For nullable schemas, check if the underlying type is string
+            const underlyingType = this.getSchemaType(schema.unwrap())
+            return underlyingType === 'string' ? 'nullable_string' : underlyingType
+        }
         if (schema instanceof z.ZodOptional) return this.getSchemaType(schema.unwrap())
-        if (schema instanceof z.ZodNullable) return this.getSchemaType(schema.unwrap())
         return 'unknown'
     }
 
@@ -639,6 +599,39 @@ export class SchemaAwareJsonishParser implements JsonishParser {
     }
 
     private enumValues: Map<z.ZodEnum<any>, Set<string>> = new Map()
+
+    private getChoiceScore(choice: Value, expectedSchemaType: string): number {
+        // Score choices based on how well they match the expected schema type
+        // Higher score = better match
+
+        if (choice.type === 'fixed_json') {
+            // Unwrap fixed_json to get the actual value
+            return this.getChoiceScore(choice.value, expectedSchemaType)
+        }
+
+        if (choice.type === 'any_of') {
+            // For any_of, use the best score from its choices
+            return Math.max(...choice.choices.map((c) => this.getChoiceScore(c, expectedSchemaType)))
+        }
+
+        // Direct type matching
+        switch (expectedSchemaType) {
+            case 'array':
+                return choice.type === 'array' ? 100 : 0
+            case 'object':
+                return choice.type === 'object' ? 100 : 0
+            case 'string':
+                return choice.type === 'string' ? 100 : 0
+            case 'number':
+                return choice.type === 'number' ? 100 : 0
+            case 'boolean':
+                return choice.type === 'boolean' ? 100 : 0
+            case 'null':
+                return choice.type === 'null' ? 100 : 0
+            default:
+                return 10 // Default low score for unknown types
+        }
+    }
 }
 
 /**

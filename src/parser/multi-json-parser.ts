@@ -1,6 +1,7 @@
 import type { Value } from '../value'
 import { CompletionState } from '../value'
 import type { ParseOptions } from './entry'
+import { ParsingMode, nextFromMode } from './entry'
 
 /**
  * Parse multiple JSON objects from a string
@@ -50,11 +51,8 @@ export function parse(
                     const jsonStr = str.slice(jsonStrStart, endIndex)
 
                     try {
-                        // Create new options for recursive parsing
-                        const newOptions = { ...options }
-                        newOptions.allFindingAllJsonObjects = false
-                        newOptions.allowAsString = false
-
+                        // Use nextFromMode like the Rust implementation
+                        const newOptions = nextFromMode(options, ParsingMode.AllJsonObjects)
                         const parsedValue = parseFunc(jsonStr, newOptions, false)
                         jsonObjects.push(parsedValue)
                     } catch (error) {
@@ -71,11 +69,8 @@ export function parse(
         const jsonStr = str.slice(jsonStrStart)
 
         try {
-            // Create new options for recursive parsing
-            const newOptions = { ...options }
-            newOptions.allFindingAllJsonObjects = false
-            newOptions.allowAsString = false
-
+            // Use nextFromMode like the Rust implementation
+            const newOptions = nextFromMode(options, ParsingMode.AllJsonObjects)
             const parsedValue = parseFunc(jsonStr, newOptions, false)
             // Mark the last object as complete
             completeValueDeeply(parsedValue)

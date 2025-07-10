@@ -1,43 +1,35 @@
 {
-	"name": "jsonish",
-	"type": "module",
-	"version": "0.0.1",
-	"author": "Kyle Mistele @0xblacklight",
-	"description": "A pure Javascript/Typescript implementation of BAML's unexported Rust-based JSONish parser",
-	"module": "dist/index.js",
-	"types": "dist/index.d.ts",
-	"scripts": {
-		"build": "bun build --target=node ./src/index.ts --outfile=dist/index.js && bun run build:declaration",
-		"build:declaration": "tsc --emitDeclarationOnly --project tsconfig.types.json",
-		"postbuild": "rimraf tsconfig.types.tsbuildinfo",
-		"test": "bun test"
-	},
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/k-mistele/jsonish.git"
-	},
-	"keywords": [
-		"json",
-		"parser",
-		"agents",
-		"functions",
-		"function calling",
-		"structured output",
-		"zod"
-	],
-	"license": "MIT",
-	"files": ["dist/*.js", "dist/*.d.ts"],
-	"devDependencies": {
-		"@babel/parser": "^7.28.0",
-		"@babel/traverse": "^7.28.0",
-		"@types/bun": "latest",
-		"bun-types": "^1.2.18",
-		"rimraf": "^6.0.1"
-	},
-	"peerDependencies": {
-		"typescript": "^5.8.3"
-	},
-	"dependencies": {
-		"zod": "^3.25.76"
-	}
+    "name": "jsonish",
+    "type": "module",
+    "version": "0.0.1",
+    "author": "Kyle Mistele @0xblacklight",
+    "description": "A pure Javascript/Typescript implementation of BAML's unexported Rust-based JSONish parser",
+    "module": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "build": "bun build --target=node ./src/index.ts --outfile=dist/index.js && bun run build:declaration",
+        "build:declaration": "tsc --emitDeclarationOnly --project tsconfig.types.json",
+        "postbuild": "rimraf tsconfig.types.tsbuildinfo",
+        "tests": "bun test ./test/*.test.ts"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/k-mistele/jsonish.git"
+    },
+    "keywords": ["json", "parser", "agents", "functions", "function calling", "structured output", "zod"],
+    "license": "MIT",
+    "files": ["dist/*.js", "dist/*.d.ts"],
+    "devDependencies": {
+        "@babel/parser": "^7.28.0",
+        "@babel/traverse": "^7.28.0",
+        "@types/bun": "latest",
+        "bun-types": "^1.2.18",
+        "rimraf": "^6.0.1"
+    },
+    "peerDependencies": {
+        "typescript": "^5.8.3"
+    },
+    "dependencies": {
+        "zod": "^3.25.76"
+    }
 }
