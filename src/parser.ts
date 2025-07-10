@@ -201,6 +201,39 @@ export class SchemaAwareJsonishParser implements JsonishParser {
                     }
                 }
 
+                // Special handling for nested multi-result arrays from findAllJSONObjects
+                // This happens when findAllJSONObjects finds multiple objects like {player_name}
+                if (value.value.length > 0 && value.value[0].type === 'array') {
+                    // Check if we have a nested array structure from multiple JSON finds
+                    const firstItem = value.value[0]
+                    if (firstItem.type === 'array' && firstItem.completionState === CompletionState.Complete) {
+                        // Look for the most meaningful result
+                        for (const item of value.value) {
+                            if (item.type === 'array' && item.value.length > 0) {
+                                // Check if this is the actual parsed array we want
+                                const firstElement = item.value[0]
+                                if (firstElement.type === 'array') {
+                                    // This looks like [array of objects, original string] pattern
+                                    try {
+                                        const converted = this.valueToPlainObject(
+                                            firstElement,
+                                            schema,
+                                            options,
+                                            originalInput
+                                        )
+                                        const validated = schema.safeParse(converted)
+                                        if (validated.success) {
+                                            return converted
+                                        }
+                                    } catch (e) {
+                                        // Continue to next item
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Standard array processing
                 const schemaInfo = this.getArraySchemaInfo(schema)
                 if (schemaInfo) {

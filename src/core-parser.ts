@@ -28,21 +28,25 @@ export class CoreParser {
             throw new Error('Max recursion depth reached')
         }
 
+        // Collect all possible results from different strategies
+        const allResults: Value[] = []
+
         // Strategy 1: Try standard JSON parsing first (matches Rust exactly)
         try {
             const parsed = JSON.parse(input)
             const value = this.fromJSONValue(parsed)
-            return value // Return directly, not wrapped in any_of for standard JSON
-        } catch (e) {}
+            // For valid JSON, return immediately without trying other strategies
+            return value
+        } catch (e: any) {}
 
         // Strategy 2: Try markdown JSON extraction (if enabled)
         if (options.extractFromMarkdown) {
             try {
                 const markdownResults = this.parseMarkdownBlocks(input, options)
                 if (markdownResults.length > 0) {
-                    return this.handleMultipleResults(markdownResults, input)
+                    allResults.push(...markdownResults)
                 }
-            } catch (e) {}
+            } catch (e: any) {}
         }
 
         // Strategy 3: Try finding all JSON objects (if enabled)
@@ -50,9 +54,14 @@ export class CoreParser {
             try {
                 const jsonObjects = this.findAllJSONObjects(input, options)
                 if (jsonObjects.length > 0) {
-                    return this.handleMultipleResults(jsonObjects, input)
+                    allResults.push(...jsonObjects)
                 }
-            } catch (e) {}
+            } catch (e: any) {}
+        }
+
+        // If we have results from strategies 2 or 3, return them
+        if (allResults.length > 0) {
+            return this.handleMultipleResults(allResults, input)
         }
 
         // Strategy 4: Try iterative parser (try_fix_jsonish equivalent) - the main malformed JSON handler
@@ -75,7 +84,7 @@ export class CoreParser {
                     completionState: CompletionState.Complete
                 }
                 return arrayResult
-            } catch (e) {}
+            } catch (e: any) {}
         }
 
         // Strategy 5: Return as string if allowed (matches Rust allow_as_string)
@@ -151,7 +160,7 @@ export class CoreParser {
                         value: parsed,
                         completionState: ValueUtils.getCompletionState(parsed)
                     })
-                } catch (e) {}
+                } catch (e: any) {}
             }
             match = markdownRegex.exec(input)
         }
@@ -184,15 +193,21 @@ export class CoreParser {
                 if (stack.length === 0 && jsonStartIndex !== null) {
                     const jsonStr = input.substring(jsonStartIndex, i + 1)
                     try {
-                        const nextOptions = {
-                            ...options,
-                            depth: options.depth + 1,
-                            extractFromMarkdown: false, // Disable markdown extraction
-                            allowFindingAllJsonObjects: false // Prevent recursive findAllJSONObjects
+                        // First try standard JSON parsing
+                        const parsed = JSON.parse(jsonStr)
+                        const value = this.fromJSONValue(parsed)
+                        results.push(value)
+                    } catch (e: any) {
+                        // If standard JSON fails, try iterative parser which handles malformed JSON
+                        try {
+                            const iterativeParser = new IterativeParser()
+                            const parsed = iterativeParser.parse(jsonStr)
+                            results.push(parsed)
+                        } catch (e2: any) {
+                            // If even iterative parser fails, skip this potential JSON object
                         }
-                        const parsed = this.parseInternal(jsonStr, nextOptions, false)
-                        results.push(parsed)
-                    } catch (e) {}
+                    }
+                    jsonStartIndex = null
                 }
             }
         }
