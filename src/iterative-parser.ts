@@ -632,28 +632,37 @@ export class IterativeParser {
 
     private buildResult(): Value {
         if (this.completedValues.length === 0) {
-            return {
-                type: 'string',
-                value: '',
-                completionState: CompletionState.Incomplete
-            }
+            throw new Error('No JSON objects found')
         }
 
         if (this.completedValues.length === 1) {
             return this.completedValues[0].value
         }
 
-        // Multiple values - filter for objects and arrays, or return all as array
+        // Multiple values - check if all are strings (lowercase check matches Rust)
+        if (this.completedValues.every((v) => v.name === 'string')) {
+            return {
+                type: 'array',
+                value: this.completedValues.map((v) => v.value),
+                completionState: CompletionState.Incomplete
+            }
+        }
+
+        // Filter for only objects and arrays
         const objectsAndArrays = this.completedValues.filter((v) => v.name === 'Object' || v.name === 'Array')
+
+        if (objectsAndArrays.length === 0) {
+            throw new Error('No JSON objects found')
+        }
 
         if (objectsAndArrays.length === 1) {
             return objectsAndArrays[0].value
         }
 
-        // Return all values as an array
+        // Return filtered values as an array
         return {
             type: 'array',
-            value: this.completedValues.map((v) => v.value),
+            value: objectsAndArrays.map((v) => v.value),
             completionState: CompletionState.Incomplete
         }
     }

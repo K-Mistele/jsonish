@@ -74,18 +74,7 @@ export class CoreParser {
                 const iterativeParser = new IterativeParser()
                 const iterativeResult = iterativeParser.parse(input)
 
-                // If the iterative parser successfully parsed the entire input as a single value,
-                // return it directly without wrapping
-                if (iterativeResult.type === 'array' && input.trim().startsWith('[') && input.trim().endsWith(']')) {
-                    console.log(`[DEBUG] Iterative parser returned array directly`)
-                    return iterativeResult
-                }
-                if (iterativeResult.type === 'object' && input.trim().startsWith('{') && input.trim().endsWith('}')) {
-                    console.log(`[DEBUG] Iterative parser returned object directly`)
-                    return iterativeResult
-                }
-
-                // Otherwise wrap iterative parser result in array with original string (matches Rust)
+                // Always wrap iterative parser result in array with original string (matches Rust)
                 const arrayResult: Value = {
                     type: 'array',
                     value: [
