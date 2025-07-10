@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { CoreParser } from './core-parser'
 import type { Value } from './value'
+import { CompletionState } from './value'
 
 /**
  * JSONish Parser Interface
@@ -98,6 +99,11 @@ export class SchemaAwareJsonishParser implements JsonishParser {
         options: ParseOptions,
         originalInput?: string
     ): any {
+        // Temporary debug log
+        if (value.type === 'array' && this.getSchemaType(schema) === 'array') {
+            console.log('[DEBUG] Processing array value:', JSON.stringify(value, null, 2))
+        }
+
         // Handle string schema preference for quoted strings
         if (this.getSchemaType(schema) === 'string' && originalInput) {
             const trimmed = originalInput.trim()
@@ -179,17 +185,34 @@ export class SchemaAwareJsonishParser implements JsonishParser {
             case 'boolean':
                 return this.coerceToSchema(value.value, schema, options)
             case 'array': {
-                // Handle array schema properly
-                if (schema instanceof z.ZodArray) {
-                    const elementSchema = schema.element
-                    return value.value.map((v) => this.valueToPlainObject(v, elementSchema, options))
+                // Check if this is a multi-result array (like from markdown extraction)
+                // where we need to pick the result that matches the schema
+                if (value.value.length > 1 && value.completionState === CompletionState.Incomplete) {
+                    // Try each value against the schema to find the best match
+                    for (const item of value.value) {
+                        try {
+                            const converted = this.valueToPlainObject(item, schema, options, originalInput)
+                            const validated = schema.safeParse(converted)
+                            if (validated.success) {
+                                return converted
+                            }
+                        } catch (e) {
+                            // Continue to next item
+                        }
+                    }
                 }
-                // If not expecting array, try to coerce the whole array
-                return this.coerceToSchema(
-                    value.value.map((v: Value) => this.valueToPlainObject(v, schema, options)),
-                    schema,
-                    options
-                )
+
+                // Standard array processing
+                const schemaInfo = this.getArraySchemaInfo(schema)
+                if (schemaInfo) {
+                    // Schema expects array - convert each element
+                    return value.value.map((item) => this.valueToPlainObject(item, schemaInfo.element, options))
+                }
+                // Schema doesn't expect array - treat as multi-result and pick first valid
+                if (value.value.length > 0) {
+                    return this.valueToPlainObject(value.value[0], schema, options)
+                }
+                return []
             }
             case 'object': {
                 const obj: Record<string, any> = {}
@@ -227,10 +250,12 @@ export class SchemaAwareJsonishParser implements JsonishParser {
 
                 return this.coerceToSchema(obj, schema, options)
             }
-            case 'markdown':
-                return this.valueToPlainObject(value.value, schema, options)
             case 'fixed_json':
-                return this.valueToPlainObject(value.value, schema, options)
+                // Fixed JSON contains the actual value
+                return this.valueToPlainObject(value.value, schema, options, originalInput)
+            case 'markdown':
+                // Markdown contains the extracted value
+                return this.valueToPlainObject(value.value, schema, options, originalInput)
             default:
                 throw new Error(`Unsupported value type: ${(value as any).type}`)
         }
@@ -545,6 +570,36 @@ export class SchemaAwareJsonishParser implements JsonishParser {
         }
         return false
     }
+
+    /**
+     * Check if a schema expects an array
+     */
+    private isArraySchema(schema: z.ZodSchema<any>): boolean {
+        return (
+            schema instanceof z.ZodArray ||
+            (schema instanceof z.ZodUnion && schema._def.options.some((opt: any) => opt instanceof z.ZodArray)) ||
+            (schema instanceof z.ZodOptional && this.isArraySchema(schema._def.innerType)) ||
+            (schema instanceof z.ZodNullable && this.isArraySchema(schema._def.innerType))
+        )
+    }
+
+    /**
+     * Get array schema info if the schema expects an array
+     */
+    private getArraySchemaInfo(schema: z.ZodSchema<any>): { element: z.ZodSchema<any> } | null {
+        if (schema instanceof z.ZodArray) {
+            return { element: schema.element }
+        }
+        if (schema instanceof z.ZodOptional && this.isArraySchema(schema._def.innerType)) {
+            return this.getArraySchemaInfo(schema._def.innerType)
+        }
+        if (schema instanceof z.ZodNullable && this.isArraySchema(schema._def.innerType)) {
+            return this.getArraySchemaInfo(schema._def.innerType)
+        }
+        return null
+    }
+
+    private enumValues: Map<z.ZodEnum<any>, Set<string>> = new Map()
 }
 
 /**

@@ -243,11 +243,11 @@ export class CoreParser {
                 return singleResult
             }
 
-            // Otherwise, wrap with original string like Rust implementation
+            // For single result, wrap with original string like Rust implementation
             return {
                 type: 'array',
                 value: [
-                    singleResult,
+                    results[0],
                     {
                         type: 'string',
                         value: originalInput,
@@ -258,10 +258,17 @@ export class CoreParser {
             }
         }
 
-        // For multiple results, return array of results (matches Rust)
-        return {
+        // For multiple results, include all of them plus the array of all results
+        // This matches the Rust behavior where schema-aware layer can choose
+        const allResultsArray: Value = {
             type: 'array',
             value: results,
+            completionState: CompletionState.Incomplete
+        }
+
+        return {
+            type: 'array',
+            value: [...results, allResultsArray],
             completionState: CompletionState.Incomplete
         }
     }

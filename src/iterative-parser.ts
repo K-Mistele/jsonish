@@ -542,6 +542,17 @@ export class IterativeParser {
     private parseUnquotedString(content: string, completionState: CompletionState): Value {
         const trimmed = content.trim()
 
+        // Check if this looks like a placeholder (e.g., {player_name})
+        // Don't try to parse it as a special value
+        if (trimmed.match(/^[a-zA-Z_][a-zA-Z0-9_]*$/)) {
+            // Just an identifier, return as string
+            return {
+                type: 'string',
+                value: trimmed,
+                completionState
+            }
+        }
+
         // Try boolean
         if (trimmed.toLowerCase() === 'true') {
             return { type: 'boolean', value: true }
