@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { CoreParser } from './core-parser'
+import { type ParseOptions as EntryParseOptions, parse as parseEntry } from './parser/entry'
 import type { Value } from './value'
 import { CompletionState } from './value'
 
@@ -52,8 +52,6 @@ export const DEFAULT_PARSE_OPTIONS: ParseOptions = {
  * Schema-aware JSONish parser implementation
  */
 export class SchemaAwareJsonishParser implements JsonishParser {
-    private coreParser = new CoreParser()
-
     parse<T>(input: string, schema: z.ZodSchema<T>, options: ParseOptions = DEFAULT_PARSE_OPTIONS): T {
         // Special handling for string schemas - prefer original input
         if (this.getSchemaType(schema) === 'string') {
@@ -81,8 +79,17 @@ export class SchemaAwareJsonishParser implements JsonishParser {
             }
         }
 
-        // Parse the input using the core parser
-        const parsedValue = this.coreParser.parse(input, options)
+        // Convert ParseOptions to EntryParseOptions
+        const entryOptions: EntryParseOptions = {
+            allFindingAllJsonObjects: options.allowFindingAllJsonObjects ?? true,
+            allowMarkdownJson: options.extractFromMarkdown ?? true,
+            allowFixes: options.allowMalformed ?? true,
+            allowAsString: true,
+            depth: 0
+        }
+
+        // Parse the input using the entry parser
+        const parsedValue = parseEntry(input, entryOptions)
 
         // Convert the Value to a plain object and coerce types based on schema
         const plainObject = this.valueToPlainObject(parsedValue, schema, options, input)
