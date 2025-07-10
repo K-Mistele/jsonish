@@ -32,15 +32,20 @@ export class CoreParser {
         try {
             const parsed = JSON.parse(input)
             const value = this.fromJSONValue(parsed)
-            return value // Return directly, not wrapped in any_of for standard JSON
+            return value // Return directly for valid JSON
         } catch (e) {}
+
+        // Collect results from all strategies (for cases where multiple sources exist)
+        const allResults: Value[] = []
+        let hasMarkdown = false
 
         // Strategy 2: Try markdown JSON extraction (if enabled)
         if (options.extractFromMarkdown) {
             try {
                 const markdownResults = this.parseMarkdownBlocks(input, options)
                 if (markdownResults.length > 0) {
-                    return this.handleMultipleResults(markdownResults, input)
+                    hasMarkdown = true
+                    allResults.push(...markdownResults)
                 }
             } catch (e) {}
         }
@@ -50,9 +55,23 @@ export class CoreParser {
             try {
                 const jsonObjects = this.findAllJSONObjects(input, options)
                 if (jsonObjects.length > 0) {
-                    return this.handleMultipleResults(jsonObjects, input)
+                    allResults.push(...jsonObjects)
                 }
             } catch (e) {}
+        }
+
+        // If we have results from multiple sources, combine them
+        if (allResults.length > 0) {
+            // If we only found markdown and nothing else, return just the markdown results
+            if (hasMarkdown && allResults.every(r => r.type === 'markdown')) {
+                return this.handleMultipleResults(allResults, input)
+            }
+            // If we found both markdown and JSON objects, combine them
+            if (allResults.length > 1) {
+                return this.combineAllResults(allResults, input)
+            }
+            // Single result
+            return this.handleMultipleResults(allResults, input)
         }
 
         // Strategy 4: Try iterative parser (try_fix_jsonish equivalent) - the main malformed JSON handler
@@ -249,6 +268,31 @@ export class CoreParser {
             type: 'array',
             value: [...results, allResultsArray],
             completionState: CompletionState.Incomplete
+        }
+    }
+
+    private combineAllResults(results: Value[], originalInput: string): Value {
+        // If we have a mix of markdown and other results, create a comprehensive any_of
+        const allChoices: Value[] = []
+        
+        // Add individual results
+        for (const result of results) {
+            allChoices.push(result)
+        }
+        
+        // Add array of all results
+        if (results.length > 1) {
+            allChoices.push({
+                type: 'array',
+                value: results,
+                completionState: CompletionState.Incomplete
+            })
+        }
+        
+        return {
+            type: 'any_of',
+            choices: allChoices,
+            originalString: originalInput
         }
     }
 }

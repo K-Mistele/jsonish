@@ -753,7 +753,7 @@ JSON Output:
             expect(result).toEqual(expected)
         })
 
-        it('should handle localization with optional fields', () => {
+        it('should handle localization with optional fields', async () => {
             const LocalizationSchema = z.object({
                 id: z.string(),
                 English: z.string(),
@@ -805,11 +805,22 @@ repleta de monstros e perigos!"""
                 }
             ]
 
-            const result = parser.parse(input, z.array(LocalizationSchema))
-            expect(result).toEqual(expected)
+            // Debug: Let's see what the parser returns
+            try {
+                const result = parser.parse(input, z.array(LocalizationSchema))
+                expect(result).toEqual(expected)
+            } catch (e) {
+                console.log('Parser error for localization with optional fields:')
+                console.log('Error:', e)
+                // Try to see what the parser returns without schema validation
+                const coreParser = new (await import('../src/core-parser')).CoreParser()
+                const rawResult = coreParser.parse(input, { extractFromMarkdown: true, allowMalformed: true })
+                console.log('Raw parser result:', JSON.stringify(rawResult, null, 2))
+                throw e
+            }
         })
 
-        it('should handle complex nested object with triple quotes', () => {
+        it('should handle complex nested object with triple quotes', async () => {
             const HeadingSchema = z.object({
                 heading: z.string(),
                 python_function_code: z.string(),
@@ -872,8 +883,18 @@ Here are the seven creative headings along with their descriptions and Python fu
                 ]
             }
 
-            const result = parser.parse(input, HeadingsSchema)
-            expect(result).toEqual(expected)
+            try {
+                const result = parser.parse(input, HeadingsSchema)
+                expect(result).toEqual(expected)
+            } catch (e) {
+                console.log('Parser error for complex nested object with triple quotes:')
+                console.log('Error:', e)
+                // Try to see what the parser returns without schema validation
+                const coreParser = new (await import('../src/core-parser')).CoreParser()
+                const rawResult = coreParser.parse(input, { extractFromMarkdown: true, allowMalformed: true })
+                console.log('Raw parser result:', JSON.stringify(rawResult, null, 2))
+                throw e
+            }
         })
 
         it('should handle injected triple quoted strings', () => {

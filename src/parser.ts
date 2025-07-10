@@ -117,60 +117,23 @@ export class SchemaAwareJsonishParser implements JsonishParser {
             }
         }
 
-        // Handle AnyOf by trying each choice - prefer string for string schemas
+        // Handle AnyOf by trying each choice
         if (value.type === 'any_of') {
-            const schemaType = this.getSchemaType(schema)
-
-            // For non-string schemas, try parsing choices first (to extract numbers/booleans from text)
-            if (schemaType !== 'string') {
-                // Try each parsed choice first
-                for (const choice of value.choices) {
-                    try {
-                        const converted = this.valueToPlainObject(choice, schema, options, originalInput)
-                        const validated = schema.safeParse(converted)
-                        if (validated.success) {
-                            return converted
-                        }
-                    } catch (e) {
-                        // Continue to next choice
+            // Try each parsed choice first
+            for (const choice of value.choices) {
+                try {
+                    const converted = this.valueToPlainObject(choice, schema, options, originalInput)
+                    const validated = schema.safeParse(converted)
+                    if (validated.success) {
+                        return converted
                     }
+                } catch (e) {
+                    // Continue to next choice
                 }
-
-                // If no choice worked, try coercing the original string
-                return this.coerceToSchema(value.originalString, schema, options)
             }
 
-            // For string schemas, prefer original string when it contains structured data
-            if (schemaType === 'string') {
-                // If original string contains JSON-like structure, prefer it
-                const hasStructuredContent = this.hasStructuredContent(value.originalString)
-                if (hasStructuredContent) {
-                    try {
-                        const validated = schema.safeParse(value.originalString)
-                        if (validated.success) {
-                            return value.originalString
-                        }
-                    } catch (e) {
-                        // Continue to other approaches
-                    }
-                }
-
-                // Otherwise, try parsed choices first (might extract better typed values)
-                for (const choice of value.choices) {
-                    try {
-                        const converted = this.valueToPlainObject(choice, schema, options, originalInput)
-                        const validated = schema.safeParse(converted)
-                        if (validated.success) {
-                            return converted
-                        }
-                    } catch (e) {
-                        // Continue to next choice
-                    }
-                }
-
-                // Finally, fall back to original string
-                return this.coerceToSchema(value.originalString, schema, options)
-            }
+            // If no choice worked, try coercing the original string
+            return this.coerceToSchema(value.originalString, schema, options)
         }
 
         // Handle other Value types
@@ -187,17 +150,10 @@ export class SchemaAwareJsonishParser implements JsonishParser {
                 // Check if this is a multi-result array (like from markdown extraction)
                 // where we need to pick the result that matches the schema
                 if (value.value.length > 1 && value.completionState === CompletionState.Incomplete) {
-                    // Try each value against the schema to find the best match
-                    for (const item of value.value) {
-                        try {
-                            const converted = this.valueToPlainObject(item, schema, options, originalInput)
-                            const validated = schema.safeParse(converted)
-                            if (validated.success) {
-                                return converted
-                            }
-                        } catch (e) {
-                            // Continue to next item
-                        }
+                    // Try to find best match recursively
+                    const match = this.findBestMatchRecursive(value, schema, options, originalInput)
+                    if (match !== null) {
+                        return match
                     }
                 }
 
@@ -599,6 +555,47 @@ export class SchemaAwareJsonishParser implements JsonishParser {
     }
 
     private enumValues: Map<z.ZodEnum<any>, Set<string>> = new Map()
+
+    /**
+     * Recursively search for the best matching value in a multi-result array
+     */
+    private findBestMatchRecursive(
+        value: Value,
+        schema: z.ZodSchema<any>,
+        options: ParseOptions,
+        originalInput?: string
+    ): any {
+        if (value.type !== 'array') {
+            return null
+        }
+
+        // First pass: try direct matches
+        for (const item of value.value) {
+            try {
+                const converted = this.valueToPlainObject(item, schema, options, originalInput)
+                const validated = schema.safeParse(converted)
+                if (validated.success) {
+                    return converted
+                }
+            } catch (e) {
+                // Continue
+            }
+        }
+
+        // Second pass: if schema expects array, recursively check nested arrays
+        if (this.isArraySchema(schema)) {
+            for (const item of value.value) {
+                if (item.type === 'array') {
+                    const nestedMatch = this.findBestMatchRecursive(item, schema, options, originalInput)
+                    if (nestedMatch !== null) {
+                        return nestedMatch
+                    }
+                }
+            }
+        }
+
+        return null
+    }
 }
 
 /**
