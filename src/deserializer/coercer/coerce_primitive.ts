@@ -22,7 +22,7 @@ export function coerceString(
     case 'string': {
       const result = createString(value.value, target)
       if (value.completionState === CompletionState.Incomplete) {
-        result.value.flags.addFlag(Flag.Incomplete, undefined)
+        getConditions(result).addFlag(Flag.Incomplete, undefined)
       }
       return result
     }

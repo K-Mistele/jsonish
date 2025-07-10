@@ -2,7 +2,7 @@
 
 import { z } from 'zod'
 import type { Value } from '../../jsonish/value'
-import type { BamlValueWithFlags } from '../types'
+import type { DeserializedValue } from '../types'
 
 // Export all coercer modules
 export * from './field_type'
@@ -180,10 +180,10 @@ export interface TypeCoercer {
     ctx: ParsingContext,
     target: z.ZodSchema,
     value: Value | undefined
-  ): BamlValueWithFlags | ParsingError
+  ): DeserializedValue | ParsingError
 }
 
 // Default value interface
 export interface DefaultValue {
-  defaultValue(error?: ParsingError): BamlValueWithFlags | null
+  defaultValue(error?: ParsingError): DeserializedValue | null
 }

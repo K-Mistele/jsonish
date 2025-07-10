@@ -25,6 +25,9 @@ export type BamlValueWithFlags =
   | { type: 'class'; name: string; flags: DeserializerConditions; target: z.ZodSchema; fields: Map<string, BamlValueWithFlags> }
   | { type: 'media'; target: z.ZodSchema; value: ValueWithFlags<{ mime: string; content: string }> }
 
+// Alias for cleaner API
+export type DeserializedValue = BamlValueWithFlags
+
 // Helper functions for creating BamlValueWithFlags
 export function createString(value: string, target: z.ZodSchema, flags?: DeserializerConditions): BamlValueWithFlags {
   return {
@@ -315,4 +318,34 @@ export function getTypeString(value: BamlValueWithFlags): string {
     case 'media':
       return 'Image'
   }
+}
+
+// Helper to create a simple value (for backwards compatibility)
+export function createValue<T>(value: T, flags?: DeserializerConditions): DeserializedValue {
+  // Determine the type and create appropriate BamlValueWithFlags
+  if (value === null) {
+    return createNull(z.null(), flags)
+  } else if (typeof value === 'string') {
+    return createString(value, z.string(), flags)
+  } else if (typeof value === 'number') {
+    return Number.isInteger(value) 
+      ? createInt(value, z.number().int(), flags)
+      : createFloat(value, z.number(), flags)
+  } else if (typeof value === 'boolean') {
+    return createBool(value, z.boolean(), flags)
+  } else if (Array.isArray(value)) {
+    // For arrays, we need to convert each item
+    const items = value.map(v => createValue(v, new DeserializerConditions()))
+    return createList(items, z.array(z.any()), flags)
+  } else if (typeof value === 'object') {
+    // For objects, create a class
+    const fields = new Map<string, BamlValueWithFlags>()
+    for (const [k, v] of Object.entries(value)) {
+      fields.set(k, createValue(v, new DeserializerConditions()))
+    }
+    return createClass('Object', fields, z.object({}), flags)
+  }
+  
+  // Fallback to string
+  return createString(String(value), z.string(), flags)
 }
