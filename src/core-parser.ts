@@ -1,6 +1,6 @@
 import { IterativeParser } from './iterative-parser'
 import type { ParseOptions } from './parser'
-import { CompletionState, Fixes, type Value, ValueUtils } from './value'
+import { CompletionState, type Value, ValueUtils } from './value'
 
 /**
  * Internal parse options with depth tracking
@@ -27,45 +27,21 @@ export class CoreParser {
         console.log(`[DEBUG] Input (first 100 chars):`, input.substring(0, 100))
 
         // Prevent infinite recursion
-        if (options.depth > 100) {
-            throw new Error('Depth limit reached. Likely a circular reference.')
+        if (options.depth > 10) {
+            throw new Error('Max recursion depth reached')
         }
 
-        // Strategy 1: Try standard JSON parsing first
+        // Strategy 1: Try standard JSON parsing first (matches Rust exactly)
         try {
             const parsed = JSON.parse(input)
             const value = this.fromJSONValue(parsed)
             console.log(`[DEBUG] Standard JSON parse successful:`, value)
-            return { type: 'any_of', choices: [value], originalString: input }
+            return value // Return directly, not wrapped in any_of for standard JSON
         } catch (e) {
             console.log(`[DEBUG] Standard JSON parse failed:`, e instanceof Error ? e.message : e)
         }
 
-        // Strategy 2: Try iterative parser for unquoted keys/malformed JSON (high priority)
-        if (options.allowMalformed && this.hasUnquotedKeysOrValues(input)) {
-            try {
-                console.log(`[DEBUG] Detected unquoted keys/values, trying iterative parser`)
-                const iterativeParser = new IterativeParser()
-                const iterativeResult = iterativeParser.parse(input)
-
-                // If we got something meaningful, use it
-                if (
-                    iterativeResult.type !== 'string' ||
-                    (iterativeResult.value.trim() !== '' && iterativeResult.value.trim() !== input.trim())
-                ) {
-                    console.log(`[DEBUG] Iterative parser successful:`, iterativeResult)
-                    return {
-                        type: 'any_of',
-                        choices: [iterativeResult],
-                        originalString: input
-                    }
-                }
-            } catch (e) {
-                console.log(`[DEBUG] Iterative parser failed:`, e instanceof Error ? e.message : e)
-            }
-        }
-
-        // Strategy 2: Try markdown JSON extraction
+        // Strategy 2: Try markdown JSON extraction (if enabled)
         if (options.extractFromMarkdown) {
             try {
                 const markdownResults = this.parseMarkdownBlocks(input, options)
@@ -78,40 +54,47 @@ export class CoreParser {
             }
         }
 
-        // Strategy 3: Try finding all JSON objects
+        // Strategy 3: Try finding all JSON objects (if enabled)
         if (options.allowMalformed) {
             try {
                 const jsonObjects = this.findAllJSONObjects(input, options)
                 if (jsonObjects.length > 0) {
                     console.log(`[DEBUG] JSON object extraction successful:`, jsonObjects.length, 'objects')
-                    const fixedResults = jsonObjects.map((obj) => ({
-                        type: 'fixed_json' as const,
-                        value: obj,
-                        fixes: [Fixes.GreppedForJSON]
-                    }))
-                    return this.handleMultipleResults(fixedResults, input)
+                    return this.handleMultipleResults(jsonObjects, input)
                 }
             } catch (e) {
                 console.log(`[DEBUG] JSON object extraction failed:`, e instanceof Error ? e.message : e)
             }
         }
 
-        // Strategy 4: (removed - iterative parser only runs for unquoted key detection)
-
-        // Strategy 5: Try fixing malformed JSON (fallback)
+        // Strategy 4: Try iterative parser (try_fix_jsonish equivalent) - the main malformed JSON handler
         if (options.allowMalformed) {
             try {
-                const fixedResults = this.tryFixMalformedJSON(input, options)
-                if (fixedResults.length > 0) {
-                    console.log(`[DEBUG] Malformed JSON fix successful:`, fixedResults.length, 'results')
-                    return this.handleMultipleResults(fixedResults, input)
+                console.log(`[DEBUG] Trying iterative parser for malformed JSON`)
+                const iterativeParser = new IterativeParser()
+                const iterativeResult = iterativeParser.parse(input)
+
+                // Always wrap iterative parser result in array with original string (matches Rust)
+                const arrayResult: Value = {
+                    type: 'array',
+                    value: [
+                        iterativeResult,
+                        {
+                            type: 'string',
+                            value: input,
+                            completionState: CompletionState.Complete
+                        }
+                    ],
+                    completionState: CompletionState.Complete
                 }
+                console.log(`[DEBUG] Iterative parser successful:`, iterativeResult)
+                return arrayResult
             } catch (e) {
-                console.log(`[DEBUG] Malformed JSON fix failed:`, e instanceof Error ? e.message : e)
+                console.log(`[DEBUG] Iterative parser failed:`, e instanceof Error ? e.message : e)
             }
         }
 
-        // Strategy 6: Return as string if allowed
+        // Strategy 5: Return as string if allowed (matches Rust allow_as_string)
         console.log(`[DEBUG] Falling back to string parsing`)
         return {
             type: 'string',
@@ -223,7 +206,8 @@ export class CoreParser {
                         const nextOptions = {
                             ...options,
                             depth: options.depth + 1,
-                            allowMalformed: false
+                            allowMalformed: false, // Disable malformed parsing to prevent recursion
+                            extractFromMarkdown: false // Disable markdown extraction
                         }
                         const parsed = this.parseInternal(jsonStr, nextOptions, false)
                         results.push(parsed)
@@ -237,87 +221,6 @@ export class CoreParser {
         return results
     }
 
-    private tryFixMalformedJSON(input: string, options: InternalParseOptions): Value[] {
-        const fixes: Array<{ value: Value; fixes: Fixes[] }> = []
-
-        // Try simple fixes for common malformed JSON issues
-        const fixAttempts = [
-            // Remove trailing commas
-            input.replace(/,(\s*[}\]])/g, '$1'),
-            // Add missing quotes around unquoted keys
-            input.replace(/([{,]\s*)([a-zA-Z_$][a-zA-Z0-9_$]*)\s*:/g, '$1"$2":'),
-            // Fix common boolean variations
-            input.replace(/\b(true|false)\b/gi, (match) => match.toLowerCase()),
-            // Try to fix incomplete JSON by adding closing braces/brackets
-            this.tryCompleteJSON(input)
-        ]
-
-        for (const attempt of fixAttempts) {
-            if (attempt !== input) {
-                try {
-                    const parsed = JSON.parse(attempt)
-                    const value = this.fromJSONValue(parsed)
-                    fixes.push({ value, fixes: [Fixes.GreppedForJSON] })
-                    break // Use first successful fix
-                } catch (e) {
-                    // Continue to next fix attempt
-                }
-            }
-        }
-
-        return fixes.map((fix) => ({
-            type: 'fixed_json' as const,
-            value: fix.value,
-            fixes: fix.fixes
-        }))
-    }
-
-    private tryCompleteJSON(input: string): string {
-        const trimmed = input.trim()
-        let completed = trimmed
-
-        // Count unclosed braces and brackets
-        let braceCount = 0
-        let bracketCount = 0
-
-        for (const char of trimmed) {
-            if (char === '{') braceCount++
-            else if (char === '}') braceCount--
-            else if (char === '[') bracketCount++
-            else if (char === ']') bracketCount--
-        }
-
-        // Add missing closing characters
-        while (braceCount > 0) {
-            completed += '}'
-            braceCount--
-        }
-        while (bracketCount > 0) {
-            completed += ']'
-            bracketCount--
-        }
-
-        return completed
-    }
-
-    private hasUnquotedKeysOrValues(input: string): boolean {
-        // Quick check for unquoted keys/values in JSON-like input
-        const trimmed = input.trim()
-
-        // Don't treat simple strings as having unquoted keys (avoid false positives for enums)
-        if (!trimmed.includes('{') && !trimmed.includes('[') && !trimmed.includes(':')) {
-            return false
-        }
-
-        // Look for patterns like: key: value (unquoted key)
-        // or { key: value } with unquoted keys
-        return (
-            /[{,]\s*[a-zA-Z_$][a-zA-Z0-9_$]*\s*:/.test(trimmed) || // unquoted keys
-            /:\s*[a-zA-Z_$][a-zA-Z0-9_$\s]+[,}]/.test(trimmed) || // unquoted values
-            /'\w+/.test(trimmed)
-        ) // single quotes
-    }
-
     private handleMultipleResults(results: Value[], originalInput: string): Value {
         if (results.length === 0) {
             return {
@@ -328,24 +231,26 @@ export class CoreParser {
         }
 
         if (results.length === 1) {
+            // For single result, wrap with original string like Rust implementation
             return {
-                type: 'any_of',
-                choices: results,
-                originalString: originalInput
+                type: 'array',
+                value: [
+                    results[0],
+                    {
+                        type: 'string',
+                        value: originalInput,
+                        completionState: CompletionState.Complete
+                    }
+                ],
+                completionState: CompletionState.Complete
             }
         }
 
-        // For multiple results, include individual items + array of all items
-        const arrayResult: Value = {
+        // For multiple results, return array of results (matches Rust)
+        return {
             type: 'array',
             value: results,
-            completionState: CompletionState.Complete
-        }
-
-        return {
-            type: 'any_of',
-            choices: [...results, arrayResult],
-            originalString: originalInput
+            completionState: CompletionState.Incomplete
         }
     }
 }

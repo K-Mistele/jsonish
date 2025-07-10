@@ -7,6 +7,7 @@ type JsonCollection =
     | { type: 'object'; keys: string[]; values: Value[]; completionState: CompletionState }
     | { type: 'array'; values: Value[]; completionState: CompletionState }
     | { type: 'quotedString'; content: string; completionState: CompletionState }
+    | { type: 'tripleQuotedString'; content: string; completionState: CompletionState }
     | { type: 'singleQuotedString'; content: string; completionState: CompletionState }
     | { type: 'unquotedString'; content: string; completionState: CompletionState }
     | { type: 'trailingComment'; content: string; completionState: CompletionState }
@@ -69,6 +70,8 @@ export class IterativeParser {
                 return this.processArrayToken(token, remaining, position)
             case 'quotedString':
                 return this.processQuotedStringToken(token, remaining, position, '"')
+            case 'tripleQuotedString':
+                return this.processTripleQuotedStringToken(token, remaining, position)
             case 'singleQuotedString':
                 return this.processQuotedStringToken(token, remaining, position, "'")
             case 'unquotedString':
@@ -117,6 +120,21 @@ export class IterativeParser {
             if (this.shouldCloseString(remaining, position, closingChar)) {
                 this.completeCollection(CompletionState.Complete)
                 return 0
+            }
+        }
+
+        this.consumeToken(token)
+        return 0
+    }
+
+    private processTripleQuotedStringToken(token: string, remaining: string[], position: number): number {
+        if (token === '"') {
+            // Check if this is the end of triple quotes
+            if (remaining[0] === '"' && remaining[1] === '"') {
+                if (this.shouldCloseString(remaining.slice(2), position, '"""')) {
+                    this.completeCollection(CompletionState.Complete)
+                    return 2 // Skip the next two quotes
+                }
             }
         }
 
@@ -174,6 +192,16 @@ export class IterativeParser {
                 })
                 return 0
             case '"':
+                // Check for triple quotes
+                if (remaining[0] === '"' && remaining[1] === '"') {
+                    this.collectionStack.push({
+                        type: 'tripleQuotedString',
+                        content: '',
+                        completionState: CompletionState.Incomplete
+                    })
+                    return 2 // Skip the next two quotes
+                }
+
                 this.collectionStack.push({
                     type: 'quotedString',
                     content: '',
@@ -215,8 +243,12 @@ export class IterativeParser {
                 completionState: CompletionState.Incomplete
             })
 
-            // Don't immediately check for closure when starting an unquoted string
-            // Let it accumulate more characters first
+            // Check immediately if we should close the string (like Rust implementation)
+            const closeResult = this.shouldCloseUnquotedString(remaining, position)
+            if (closeResult.shouldClose) {
+                this.completeCollection(closeResult.completionState)
+                return closeResult.skipCount
+            }
         }
 
         return 0
@@ -272,47 +304,102 @@ export class IterativeParser {
         skipCount: number
     } {
         const context = this.getParsingContext()
-        const skipCount = 0
 
-        for (let i = 0; i < remaining.length; i++) {
-            const char = remaining[i]
-
-            switch (char) {
-                case ':':
-                    if (context.inObjectKey) {
-                        return { shouldClose: true, completionState: CompletionState.Complete, skipCount: i }
-                    }
+        // Determine parsing position like Rust implementation
+        // Position 0: Top level, Position 2: Object key, Position 3: Object value, Position 4: Array
+        let pos: number
+        if (this.collectionStack.length < 2) {
+            pos = 0 // Top level
+        } else {
+            const parentCollection = this.collectionStack[this.collectionStack.length - 2]
+            switch (parentCollection.type) {
+                case 'object':
+                    const objCollection = parentCollection as Extract<JsonCollection, { type: 'object' }>
+                    pos = objCollection.keys.length === objCollection.values.length ? 2 : 3 // 2=key, 3=value
                     break
-                case ',':
-                    if (context.inObjectValue || context.inArray) {
-                        return { shouldClose: true, completionState: CompletionState.Complete, skipCount: i }
-                    }
+                case 'array':
+                    pos = 4 // Array
                     break
-                case '}':
-                    if (context.inObjectKey || context.inObjectValue) {
-                        return { shouldClose: true, completionState: CompletionState.Complete, skipCount: i }
-                    }
-                    break
-                case ']':
-                    if (context.inArray) {
-                        return { shouldClose: true, completionState: CompletionState.Complete, skipCount: i }
-                    }
-                    break
-                case '{':
-                case '[':
-                    if (!context.hasParentObject) {
-                        return { shouldClose: true, completionState: CompletionState.Complete, skipCount: i }
-                    }
-                    break
-                case '\n':
-                    if (context.inObjectValue) {
-                        return { shouldClose: true, completionState: CompletionState.Complete, skipCount: i }
-                    }
+                default:
+                    pos = 1 // Continue
                     break
             }
         }
 
-        return { shouldClose: true, completionState: CompletionState.Incomplete, skipCount: remaining.length }
+        switch (pos) {
+            case 0: {
+                // Top level - look for new objects/arrays
+                for (let i = 0; i < remaining.length; i++) {
+                    const char = remaining[i]
+                    if (char === '{' || char === '[') {
+                        return { shouldClose: true, completionState: CompletionState.Complete, skipCount: i }
+                    }
+                    // Consume character into current string (like Rust implementation)
+                    this.consumeToken(char)
+                }
+                return { shouldClose: true, completionState: CompletionState.Incomplete, skipCount: remaining.length }
+            }
+
+            case 1: {
+                // Continue - don't close
+                return { shouldClose: false, completionState: CompletionState.Incomplete, skipCount: 0 }
+            }
+
+            case 2: {
+                // Object key - close on ':'
+                for (let i = 0; i < remaining.length; i++) {
+                    const char = remaining[i]
+                    if (char === ':') {
+                        return { shouldClose: true, completionState: CompletionState.Complete, skipCount: i }
+                    }
+                    // Consume character into current string (like Rust implementation)
+                    this.consumeToken(char)
+                }
+                return { shouldClose: true, completionState: CompletionState.Incomplete, skipCount: remaining.length }
+            }
+
+            case 3: {
+                // Object value - close on ',' or '}'
+                for (let i = 0; i < remaining.length; i++) {
+                    const char = remaining[i]
+                    if (char === ',') {
+                        // Check if next character is newline (special case in Rust)
+                        if (i + 1 < remaining.length && remaining[i + 1] === '\n') {
+                            return { shouldClose: true, completionState: CompletionState.Complete, skipCount: i }
+                        }
+                        // Check if this is the last character (end of input case)
+                        if (i + 1 >= remaining.length) {
+                            return { shouldClose: true, completionState: CompletionState.Complete, skipCount: i }
+                        }
+                        // Regular comma - consume it and continue (like Rust implementation)
+                        this.consumeToken(char)
+                    } else if (char === '}') {
+                        return { shouldClose: true, completionState: CompletionState.Complete, skipCount: i }
+                    } else {
+                        // Consume character into current string (like Rust implementation)
+                        this.consumeToken(char)
+                    }
+                }
+                return { shouldClose: true, completionState: CompletionState.Incomplete, skipCount: remaining.length }
+            }
+
+            case 4: {
+                // Array - close on ',' or ']'
+                for (let i = 0; i < remaining.length; i++) {
+                    const char = remaining[i]
+                    if (char === ',' || char === ']') {
+                        return { shouldClose: true, completionState: CompletionState.Complete, skipCount: i }
+                    }
+                    // Consume character into current string (like Rust implementation)
+                    this.consumeToken(char)
+                }
+                // If no delimiter found, close at end
+                return { shouldClose: true, completionState: CompletionState.Incomplete, skipCount: remaining.length }
+            }
+
+            default:
+                return { shouldClose: true, completionState: CompletionState.Incomplete, skipCount: remaining.length }
+        }
     }
 
     private getParsingContext() {
@@ -406,6 +493,12 @@ export class IterativeParser {
                     value: collection.content,
                     completionState
                 }
+            case 'tripleQuotedString':
+                return {
+                    type: 'string',
+                    value: this.dedentString(collection.content),
+                    completionState
+                }
             case 'unquotedString':
                 return this.parseUnquotedString(collection.content, completionState)
             case 'trailingComment':
@@ -414,6 +507,36 @@ export class IterativeParser {
             default:
                 return null
         }
+    }
+
+    /**
+     * Remove common leading whitespace from all lines (dedent)
+     * Similar to Python's textwrap.dedent or Rust's dedent function
+     */
+    private dedentString(text: string): string {
+        const lines = text.split('\n')
+
+        // Find the minimum indentation (ignoring empty lines)
+        let minIndent = Number.POSITIVE_INFINITY
+        for (const line of lines) {
+            if (line.trim() === '') continue // Skip empty lines
+
+            const indent = line.length - line.trimStart().length
+            minIndent = Math.min(minIndent, indent)
+        }
+
+        // If no indentation found, return as-is
+        if (minIndent === Number.POSITIVE_INFINITY || minIndent === 0) {
+            return text
+        }
+
+        // Remove the common indentation from all lines
+        return lines
+            .map((line) => {
+                if (line.trim() === '') return line // Keep empty lines as-is
+                return line.slice(minIndent)
+            })
+            .join('\n')
     }
 
     private parseUnquotedString(content: string, completionState: CompletionState): Value {
@@ -495,10 +618,15 @@ export class IterativeParser {
                 return 'Array'
             case 'quotedString':
             case 'singleQuotedString':
-            case 'unquotedString':
+            case 'tripleQuotedString':
                 return 'String'
-            default:
+            case 'unquotedString':
+                return 'UnquotedString'
+            case 'trailingComment':
+            case 'blockComment':
                 return 'Comment'
+            default:
+                return 'Unknown'
         }
     }
 

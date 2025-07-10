@@ -64,21 +64,60 @@ export class SchemaAwareJsonishParser implements JsonishParser {
     }
 
     private valueToPlainObject(value: Value, schema: z.ZodSchema<any>, options: ParseOptions): any {
-        // Handle AnyOf by trying each choice
+        // Handle AnyOf by trying each choice - prefer string for string schemas
         if (value.type === 'any_of') {
-            for (const choice of value.choices) {
-                try {
-                    const converted = this.valueToPlainObject(choice, schema, options)
-                    const validated = schema.safeParse(converted)
-                    if (validated.success) {
-                        return converted
+            const schemaType = this.getSchemaType(schema)
+
+            // For non-string schemas, try parsing choices first (to extract numbers/booleans from text)
+            if (schemaType !== 'string') {
+                // Try each parsed choice first
+                for (const choice of value.choices) {
+                    try {
+                        const converted = this.valueToPlainObject(choice, schema, options)
+                        const validated = schema.safeParse(converted)
+                        if (validated.success) {
+                            return converted
+                        }
+                    } catch (e) {
+                        // Continue to next choice
                     }
-                } catch (e) {
-                    // Continue to next choice
                 }
+
+                // If no choice worked, try coercing the original string
+                return this.coerceToSchema(value.originalString, schema, options)
             }
-            // If no choice worked, try the original string as fallback
-            return this.coerceToSchema(value.originalString, schema, options)
+
+            // For string schemas, prefer original string when it contains structured data
+            if (schemaType === 'string') {
+                // If original string contains JSON-like structure, prefer it
+                const hasStructuredContent = this.hasStructuredContent(value.originalString)
+                if (hasStructuredContent) {
+                    try {
+                        const validated = schema.safeParse(value.originalString)
+                        if (validated.success) {
+                            return value.originalString
+                        }
+                    } catch (e) {
+                        // Continue to other approaches
+                    }
+                }
+
+                // Otherwise, try parsed choices first (might extract better typed values)
+                for (const choice of value.choices) {
+                    try {
+                        const converted = this.valueToPlainObject(choice, schema, options)
+                        const validated = schema.safeParse(converted)
+                        if (validated.success) {
+                            return converted
+                        }
+                    } catch (e) {
+                        // Continue to next choice
+                    }
+                }
+
+                // Finally, fall back to original string
+                return this.coerceToSchema(value.originalString, schema, options)
+            }
         }
 
         // Handle other Value types
@@ -175,13 +214,9 @@ export class SchemaAwareJsonishParser implements JsonishParser {
 
             switch (targetType) {
                 case 'number':
-                    const num = Number(trimmed)
-                    return Number.isNaN(num) ? value : num
+                    return this.parseNumberFromString(trimmed)
                 case 'boolean':
-                    const lower = trimmed.toLowerCase()
-                    if (lower === 'true' || lower === 'yes' || lower === '1') return true
-                    if (lower === 'false' || lower === 'no' || lower === '0') return false
-                    return value
+                    return this.parseBooleanFromString(trimmed, value)
                 case 'array':
                     // Single value to array
                     if (schema instanceof z.ZodArray) {
@@ -268,6 +303,73 @@ export class SchemaAwareJsonishParser implements JsonishParser {
     }
 
     /**
+     * Parse numbers from various string formats
+     */
+    private parseNumberFromString(str: string): number | string {
+        // Remove common formatting characters
+        let cleaned = str.replace(/[$,]/g, '') // Remove dollar signs and commas
+
+        // Handle fractions like "1/5"
+        if (cleaned.includes('/')) {
+            const parts = cleaned.split('/')
+            if (parts.length === 2) {
+                const numerator = Number(parts[0].trim())
+                const denominator = Number(parts[1].trim())
+                if (!Number.isNaN(numerator) && !Number.isNaN(denominator) && denominator !== 0) {
+                    return numerator / denominator
+                }
+            }
+        }
+
+        // Handle trailing dots like "12.11."
+        if (cleaned.endsWith('.') && !cleaned.endsWith('..')) {
+            cleaned = cleaned.slice(0, -1)
+        }
+
+        // Extract first number from text like "1 cup unsalted butter"
+        const numberMatch = cleaned.match(/^(\d+(?:\.\d+)?)/)
+        if (numberMatch) {
+            const num = Number(numberMatch[1])
+            if (!Number.isNaN(num)) {
+                return num
+            }
+        }
+
+        // Try parsing the cleaned string directly
+        const num = Number(cleaned)
+        return Number.isNaN(num) ? str : num
+    }
+
+    /**
+     * Parse booleans from text, including extraction from longer strings
+     */
+    private parseBooleanFromString(trimmed: string, originalValue: string): boolean | string {
+        const lower = trimmed.toLowerCase()
+
+        // Direct boolean matches
+        if (lower === 'true' || lower === 'yes' || lower === '1') return true
+        if (lower === 'false' || lower === 'no' || lower === '0') return false
+
+        // Extract boolean from text patterns
+        const booleanPatterns = [
+            /\b(true|false)\b/i,
+            /\*\*(true|false)\*\*/i, // **True**
+            /answer\s*:?\s*(true|false)\b/i // Answer: True
+        ]
+
+        for (const pattern of booleanPatterns) {
+            const match = originalValue.match(pattern)
+            if (match) {
+                const found = match[1].toLowerCase()
+                if (found === 'true') return true
+                if (found === 'false') return false
+            }
+        }
+
+        return originalValue
+    }
+
+    /**
      * Extract enum values from text using advanced pattern matching
      * Handles cases like:
      * - "ONE: description" -> "ONE"
@@ -351,6 +453,27 @@ export class SchemaAwareJsonishParser implements JsonishParser {
         }
 
         return null
+    }
+
+    /**
+     * Check if a string contains structured content (e.g., JSON, markdown code block)
+     * This is a heuristic and might need refinement based on actual JSON/Markdown patterns.
+     */
+    private hasStructuredContent(text: string): boolean {
+        // Simple checks for common JSON/Markdown patterns
+        if (text.startsWith('```json') && text.endsWith('```')) {
+            return true
+        }
+        if (text.startsWith('```') && text.endsWith('```')) {
+            return true
+        }
+        if (text.startsWith('{') && text.endsWith('}')) {
+            return true
+        }
+        if (text.startsWith('[') && text.endsWith(']')) {
+            return true
+        }
+        return false
     }
 }
 
