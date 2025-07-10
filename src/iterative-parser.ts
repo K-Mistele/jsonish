@@ -550,8 +550,8 @@ export class IterativeParser {
             return { type: 'boolean', value: false }
         }
 
-        // Try null
-        if (trimmed.toLowerCase() === 'null') {
+        // Try null - must be exact case match
+        if (trimmed === 'null') {
             return { type: 'null' }
         }
 

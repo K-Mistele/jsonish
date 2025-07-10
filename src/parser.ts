@@ -54,6 +54,32 @@ export class SchemaAwareJsonishParser implements JsonishParser {
     private coreParser = new CoreParser()
 
     parse<T>(input: string, schema: z.ZodSchema<T>, options: ParseOptions = DEFAULT_PARSE_OPTIONS): T {
+        // Special handling for string schemas - prefer original input
+        if (this.getSchemaType(schema) === 'string') {
+            try {
+                // Check if input is valid JSON (would parse as object/array)
+                const testParse = JSON.parse(input)
+                if (typeof testParse === 'object' && testParse !== null) {
+                    // It's valid JSON object/array, but schema wants string
+                    // Return the original input as string
+                    const result = schema.parse(input)
+                    return result
+                }
+            } catch (e) {
+                // Not valid JSON, check if it's an incomplete quoted string
+                const trimmed = input.trim()
+                if (
+                    (trimmed.startsWith('"') && !trimmed.endsWith('"')) ||
+                    (trimmed.startsWith("'") && !trimmed.endsWith("'"))
+                ) {
+                    // Incomplete quoted string - return original
+                    const result = schema.parse(input)
+                    return result
+                }
+                // Continue with normal parsing
+            }
+        }
+
         // Parse the input using the core parser
         const parsedValue = this.coreParser.parse(input, options)
 
@@ -171,8 +197,21 @@ export class SchemaAwareJsonishParser implements JsonishParser {
                 // Handle object schema properly
                 if (schema instanceof z.ZodObject) {
                     const shape = schema.shape
+
+                    // Create a map for normalized key matching
+                    const normalizedKeyMap = new Map<string, string>()
+                    for (const key of Object.keys(shape)) {
+                        normalizedKeyMap.set(key.trim(), key)
+                    }
+
                     for (const [key, val] of value.value) {
-                        if (shape[key]) {
+                        const trimmedKey = key.trim()
+                        const schemaKey = normalizedKeyMap.get(trimmedKey)
+
+                        if (schemaKey && shape[schemaKey]) {
+                            obj[schemaKey] = this.valueToPlainObject(val, shape[schemaKey], options)
+                        } else if (shape[key]) {
+                            // Try exact match as fallback
                             obj[key] = this.valueToPlainObject(val, shape[key], options)
                         } else {
                             // Field not in schema, use raw value
@@ -371,6 +410,15 @@ export class SchemaAwareJsonishParser implements JsonishParser {
         // Direct boolean matches
         if (lower === 'true' || lower === 'yes' || lower === '1') return true
         if (lower === 'false' || lower === 'no' || lower === '0') return false
+
+        // Check for ambiguous cases - text containing both true and false
+        const containsTrue = /\btrue\b/i.test(originalValue)
+        const containsFalse = /\bfalse\b/i.test(originalValue)
+
+        if (containsTrue && containsFalse) {
+            // Ambiguous - contains both true and false
+            throw new Error('Ambiguous boolean value: text contains both "true" and "false"')
+        }
 
         // Extract boolean from text patterns
         const booleanPatterns = [
