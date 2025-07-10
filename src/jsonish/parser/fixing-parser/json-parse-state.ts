@@ -1,4 +1,4 @@
-import { CompletionState, type Fixes, type Value } from '../../value'
+import { CompletionState, type Fixes, type Value } from '../../../value'
 import { type JsonCollection, collectionToValue, getCollectionName } from './json-collection'
 
 /**

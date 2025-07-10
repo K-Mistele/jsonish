@@ -1,5 +1,5 @@
-import type { Value } from '../value'
-import { CompletionState } from '../value'
+import type { Value } from '../../value'
+import { CompletionState } from '../../value'
 import type { ParseOptions } from './entry'
 import { ParsingMode, nextFromMode } from './entry'
 

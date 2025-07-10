@@ -1,4 +1,4 @@
-import { CompletionState, Fixes, type Value, ValueUtils } from '../value'
+import { CompletionState, Fixes, type Value, ValueUtils } from '../../value'
 import { parseFixing } from './fixing-parser/index'
 import type { MarkdownResult } from './markdown-parser'
 import { parse as parseMarkdown } from './markdown-parser'
