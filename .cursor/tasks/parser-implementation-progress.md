@@ -1,7 +1,7 @@
 # JSONish Parser Implementation Progress
 
 ## Task Overview
-Implement BAML's JSONish parser in TypeScript based on the Rust implementation, creating a production-ready parser that handles malformed JSON, mixed content, and schema-aware type coercion.
+Implement BAML's JSONish parser (`baml/engine/baml-lib/jsonish`) in TypeScript based on the Rust implementation, creating a production-ready parser that handles malformed JSON, mixed content, and schema-aware type coercion.
 
 **🎯 TDD Goal**: Achieve 100% test pass rate (412/412 tests) for production readiness
 
