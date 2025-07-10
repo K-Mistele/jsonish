@@ -5,7 +5,7 @@ export { ParsingMode, nextFromMode, parse, type ParseOptions } from './entry'
 export { defaultParseOptions, parseFunc, parseJsonish, parsePartial } from './entry'
 
 import { z } from 'zod'
-import type { Value } from '../../value'
+import type { Value } from '../value'
 // Import dependencies for createParser
 import { type ParseOptions, defaultParseOptions, parse } from './entry'
 
@@ -326,5 +326,5 @@ export { createCodeBlock, createString, isCodeBlock, isString } from './markdown
 export type { MarkdownResult } from './markdown-parser'
 
 // Value utilities - re-exported for convenience
-export { CompletionState, Fixes, ValueUtils } from '../../value'
-export type { Value } from '../../value'
+export { CompletionState, Fixes, ValueUtils } from '../value'
+export type { Value } from '../value'

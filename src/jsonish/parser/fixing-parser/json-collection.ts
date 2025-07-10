@@ -1,4 +1,4 @@
-import { CompletionState, type Value } from '../../../value'
+import { CompletionState, type Value } from '../../value'
 
 /**
  * Represents different types of JSON collections being parsed

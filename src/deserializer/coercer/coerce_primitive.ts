@@ -3,8 +3,8 @@
 import { z } from 'zod'
 import type { Value } from '../../jsonish/value'
 import { CompletionState } from '../../jsonish/value'
-import type { ParsingContext, ParsingError } from './index'
-import { createString, createInt, createFloat, createBool, createNull, type BamlValueWithFlags } from '../types'
+import { ParsingContext, ParsingError } from './index'
+import { createString, createInt, createFloat, createBool, createNull, type BamlValueWithFlags, getConditions } from '../types'
 import { DeserializerConditions, Flag } from '../deserialize_flags'
 import { coerceArrayToSingular } from './array_helper'
 
@@ -105,7 +105,7 @@ export function coerceInt(
 
   // Add incomplete flag if needed
   if (!(result instanceof ParsingError) && value.completionState === CompletionState.Incomplete) {
-    result.value.flags.addFlag(Flag.Incomplete, undefined)
+    getConditions(result).addFlag(Flag.Incomplete, undefined)
   }
 
   return result
@@ -162,7 +162,7 @@ export function coerceFloat(
 
   // Add incomplete flag if needed
   if (!(result instanceof ParsingError) && value.completionState === CompletionState.Incomplete) {
-    result.value.flags.addFlag(Flag.Incomplete, undefined)
+    getConditions(result).addFlag(Flag.Incomplete, undefined)
   }
 
   return result
@@ -225,7 +225,7 @@ export function coerceBool(
 
   // Add incomplete flag if needed
   if (!(result instanceof ParsingError) && value.completionState === CompletionState.Incomplete) {
-    result.value.flags.addFlag(Flag.Incomplete, undefined)
+    getConditions(result).addFlag(Flag.Incomplete, undefined)
   }
 
   return result

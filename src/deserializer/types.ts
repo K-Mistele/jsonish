@@ -128,6 +128,23 @@ export function createClass(
   }
 }
 
+export function createMedia(
+  mime: string,
+  content: string,
+  target: z.ZodSchema,
+  flags?: DeserializerConditions
+): BamlValueWithFlags {
+  return {
+    type: 'media',
+    target,
+    value: {
+      value: { mime, content },
+      target,
+      flags: flags || new DeserializerConditions()
+    }
+  }
+}
+
 // Helper to add a flag to a BamlValueWithFlags
 export function addFlag(value: BamlValueWithFlags, flag: FlagWithData): void {
   switch (value.type) {

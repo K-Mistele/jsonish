@@ -1,4 +1,4 @@
-import { CompletionState, Fixes, type Value } from '../../../value'
+import { CompletionState, Fixes, type Value } from '../../value'
 import type { ParseOptions } from '../entry'
 import { JsonParseState } from './json-parse-state'
 
