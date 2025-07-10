@@ -26,7 +26,9 @@ import { coerceArray } from './coerce_array'
 import { coerceLiteral } from './coerce_literal'
 import { coerceMap } from './coerce_map'
 import { coerceUnion } from './coerce_union'
-import { coerceAlias, coerceClass, coerceEnum } from './ir_ref'
+import { coerceAlias } from './ir_ref/coerce_alias'
+import { coerceClass } from './ir_ref/coerce_class'
+import { coerceEnum } from './ir_ref/coerce_enum'
 
 // Main field type coercer
 export class FieldTypeCoercer implements TypeCoercer, DefaultValue {
