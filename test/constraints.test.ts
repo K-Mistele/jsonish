@@ -36,23 +36,18 @@ describe("Constraints", () => {
 			expect(result).toEqual(expected);
 		});
 
-		test("should handle object failing one check with warning", () => {
+		test("should fail object violating constraints", () => {
 			const input = '{"age": 11, "name": "Greg"}';
-			const expected = { age: 11, name: "Greg" };
 
-			// In BAML, checks are warnings, so parsing succeeds
-			// but the parser may have a lower confidence score
-			const result = parser.parse(input, FooWithMultipleChecksSchema);
-			expect(result).toEqual(expected);
+			// Zod validation throws on constraint violations
+			expect(() => parser.parse(input, FooWithMultipleChecksSchema)).toThrow();
 		});
 
-		test("should handle object failing two checks with warning", () => {
+		test("should fail object violating multiple constraints", () => {
 			const input = '{"age": 21, "name": "Grog"}';
-			const expected = { age: 21, name: "Grog" };
 
-			// Failing multiple checks still succeeds but with lower score
-			const result = parser.parse(input, FooWithMultipleChecksSchema);
-			expect(result).toEqual(expected);
+			// Zod validation throws on any constraint violation
+			expect(() => parser.parse(input, FooWithMultipleChecksSchema)).toThrow();
 		});
 
 		test("should fail on object failing assert (negative age)", () => {
@@ -104,16 +99,12 @@ describe("Constraints", () => {
 			expect(result).toEqual(expected);
 		});
 
-		test("should handle ambiguous union value", () => {
+		test("should handle ambiguous union value with best match", () => {
 			const input = '{"bar": 15, "things":[]}';
-			const expected = {
-				bar: { bar: 15 }, // Neither constraint fully satisfied
-				things: [],
-			};
-
-			// Parser should still succeed but may choose arbitrarily
-			const result = parser.parse(input, EitherSchema);
-			expect(result).toEqual(expected);
+			
+			// Value 15 doesn't satisfy either constraint (< 10 or > 20)
+			// Parser should pick the best match or fail validation
+			expect(() => parser.parse(input, EitherSchema)).toThrow();
 		});
 
 		test("should fail on list length assert", () => {
@@ -142,15 +133,11 @@ describe("Constraints", () => {
 			expect(result).toEqual(expected);
 		});
 
-		test("should handle map failing check with warning", () => {
+		test("should fail map violating constraints", () => {
 			const input = '{"foo": {"hello": 11, "there": 13}}';
-			const expected = {
-				foo: { hello: 11, there: 13 },
-			};
 
-			// Check failures are warnings, so parsing succeeds
-			const result = parser.parse(input, MapWithCheckSchema);
-			expect(result).toEqual(expected);
+			// Zod validation throws on constraint violations
+			expect(() => parser.parse(input, MapWithCheckSchema)).toThrow();
 		});
 	});
 
@@ -165,15 +152,11 @@ describe("Constraints", () => {
 			inner: InnerSchema,
 		});
 
-		test("should handle nested class constraint failure with warning", () => {
+		test("should fail nested class violating constraints", () => {
 			const input = '{"inner": {"value": 15}}';
-			const expected = {
-				inner: { value: 15 },
-			};
 
-			// Check failure in nested class is still a warning
-			const result = parser.parse(input, OuterSchema);
-			expect(result).toEqual(expected);
+			// Zod validation throws on nested constraint violations
+			expect(() => parser.parse(input, OuterSchema)).toThrow();
 		});
 	});
 

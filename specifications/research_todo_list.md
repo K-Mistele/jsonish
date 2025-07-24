@@ -12,9 +12,9 @@ When resuming this task, continue from the first "pending" item in the list belo
 
 - [x] 01-basic-parsing - COMPLETED (already has research document)
 - [x] 05-enum-parsing - COMPLETED (already has research document)
-- [ ] 02-object-class-parsing - PENDING
-- [ ] 03-advanced-object-parsing - PENDING  
-- [ ] 04-array-list-parsing - PENDING
+- [x] 02-object-class-parsing - COMPLETED (research_2025-07-24_03-23-13_rust-object-class-parsing-architecture.md)
+- [x] 03-advanced-object-parsing - COMPLETED (research_2025-07-23_22-46-43_rust-advanced-object-parsing-architecture.md)
+- [x] 04-array-list-parsing - COMPLETED (research_2025-07-23_23-02-04_rust-array-list-parsing-architecture.md)
 - [ ] 06-union-type-resolution - PENDING
 - [ ] 07-literal-value-parsing - PENDING
 - [ ] 08-map-record-parsing - PENDING
@@ -25,7 +25,7 @@ When resuming this task, continue from the first "pending" item in the list belo
 - [ ] 13-code-extraction-parsing - PENDING
 
 ## Current Status
-Starting with 02-object-class-parsing
+Completed 04-array-list-parsing. Next: 06-union-type-resolution
 
 ## Notes
 - Each research document should be saved as `research_YYYY-MM-DD_HH-MM-SS_rust-[feature-name]-architecture.md`

@@ -58,10 +58,10 @@ describe("Aliases", () => {
 			expect(result).toEqual(expected);
 		});
 
-		// Recursive alias cycle: A = B, B = C, C = A[]
+		// Simulated recursive type cycle using z.lazy()
 		test("should parse recursive alias cycle", () => {
-			// In TypeScript/Zod, we can't directly represent mutual recursion like BAML
-			// So we simulate with a recursive array type
+			// Using z.lazy() to handle recursive type definitions in TypeScript/Zod
+			// This simulates the recursive array pattern effectively
 			const schema = createRecursiveListType();
 			const input = "[[], [], [[]]]";
 			const expected = [[], [], [[]]];
@@ -251,8 +251,8 @@ describe("Aliases", () => {
 		});
 
 		test("should parse JSON defined with cycles (using mutually recursive types)", () => {
-			// In TypeScript we simulate: JsonValue = int | float | bool | string | null | JsonArray | JsonObject
-			// JsonArray = JsonValue[], JsonObject = map<string, JsonValue>
+			// Using z.lazy() to represent mutually recursive JsonValue types in TypeScript/Zod
+			// JsonValue supports arrays and objects that contain other JsonValues
 			const input = `{
         "number": 1,
         "string": "test",

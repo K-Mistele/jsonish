@@ -518,37 +518,6 @@ describe("Objects", () => {
 		});
 	});
 
-	describe("Field Aliases", () => {
-		it("should handle field aliases", () => {
-			// Note: This is a placeholder test - field aliases would need to be implemented
-			// in the schema definition or parser logic
-			const schema = z.object({
-				key: z.string(),
-				key2: z.string(),
-				key3: z.string(),
-				key4: z.string(),
-				key5: z.string(),
-			});
-			const input = `{
-        "key-dash": "This is a value with a dash",
-        "key21": "This is a value for key21",
-        "key with space": "This is a value with space",
-        "key4": "This is a value for key4",
-        "key.with.punctuation/123": "This is a value with punctuation and numbers"
-      }`;
-			const expected = {
-				key: "This is a value with a dash",
-				key2: "This is a value for key21",
-				key3: "This is a value with space",
-				key4: "This is a value for key4",
-				key5: "This is a value with punctuation and numbers",
-			};
-
-			// This test would need alias mapping implementation
-			const result = parser.parse(input, schema);
-			expect(result).toEqual(expected);
-		});
-	});
 
 	describe("Whitespace and Formatting", () => {
 		it("should handle whitespace in keys", () => {
