@@ -2,6 +2,8 @@
 
 You are tasked with creating git commits for the changes made during this session.
 
+**IMPORTANT**: YOU MAY NOT INCLUDE CO-AUTHOR CREDIT OR ATTRIBUTION TO CLAUDE OR ANYONE ELSE IN COMMIT MESSAGES. THIS IS COMPLETELY UNACCEPTABLE AND WILL RESULT IN YOUR WORK BEING DISCARDED.
+
 ## Process:
 
 1. **Think about what changed:**
@@ -118,3 +120,4 @@ Use **Conventional Commits** format appropriate for a parsing library:
 - This is a TypeScript port of BAML's Rust-based JSONish parser
 - Uses Zod for schema validation and type definitions
 - Test coverage is critical - ensure new features include tests
+- **NEVER** include attribution or co-author credit to yourself in commit messages; this is not acceptable.
