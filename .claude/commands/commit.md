@@ -113,7 +113,7 @@ Use **Conventional Commits** format appropriate for a parsing library:
 - You have the full context of what was done in this session
 - Group related changes together (e.g., parser logic + corresponding tests)
 - Keep commits focused and atomic when possible
-- The user trusts your judgment - they asked you to commit
+- The user trusts your judgment - they asked you to commit. don't present a commit plan, just do it.
 - Never include claude attribution in commit messages, and never add attribution to yourself or co-author credit.
 - This is a TypeScript port of BAML's Rust-based JSONish parser
 - Uses Zod for schema validation and type definitions
