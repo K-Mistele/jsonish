@@ -23,6 +23,7 @@ When resuming this task, continue from the first "pending" item in the list belo
 - [ ] 11-streaming-parsing - PENDING
 - [ ] 12-partial-object-parsing - PENDING
 - [ ] 13-code-extraction-parsing - PENDING
+- [ ] 14-discriminated-union - PENDING
 
 ## Current Status
 Completed 09-alias-type-system. Next: 10-constraint-validation
