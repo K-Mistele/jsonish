@@ -114,12 +114,7 @@ Use **Conventional Commits** format appropriate for a parsing library:
 - Group related changes together (e.g., parser logic + corresponding tests)
 - Keep commits focused and atomic when possible
 - The user trusts your judgment - they asked you to commit
-- Include Claude attribution as required:
-  ```
-  🤖 Generated with [Claude Code](https://claude.ai/code)
-
-  Co-Authored-By: Claude <noreply@anthropic.com>
-  ```
+- Never include claude attribution in commit messages, and never add attribution to yourself or co-author credit.
 - This is a TypeScript port of BAML's Rust-based JSONish parser
 - Uses Zod for schema validation and type definitions
 - Test coverage is critical - ensure new features include tests
