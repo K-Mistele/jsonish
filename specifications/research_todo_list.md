@@ -17,15 +17,15 @@ When resuming this task, continue from the first "pending" item in the list belo
 - [x] 04-array-list-parsing - COMPLETED (research_2025-07-23_23-02-04_rust-array-list-parsing-architecture.md)
 - [x] 06-union-type-resolution - COMPLETED (research_2025-07-23_23-21-13_rust-union-type-resolution-architecture.md)
 - [x] 07-literal-value-parsing - COMPLETED (research_2025-07-24_04-36-18_rust-literal-value-parsing-architecture.md)
-- [ ] 08-map-record-parsing - PENDING
-- [ ] 09-alias-type-system - PENDING
+- [x] 08-map-record-parsing - COMPLETED (research_2025-07-24_04-48-56_map-record-parsing-architecture.md)
+- [x] 09-alias-type-system - COMPLETED (research_2025-07-24_05-02-16_rust-alias-type-system-architecture.md)
 - [ ] 10-constraint-validation - PENDING
 - [ ] 11-streaming-parsing - PENDING
 - [ ] 12-partial-object-parsing - PENDING
 - [ ] 13-code-extraction-parsing - PENDING
 
 ## Current Status
-Completed 07-literal-value-parsing. Next: 08-map-record-parsing
+Completed 09-alias-type-system. Next: 10-constraint-validation
 
 ## Notes
 - Each research document should be saved as `research_YYYY-MM-DD_HH-MM-SS_rust-[feature-name]-architecture.md`
