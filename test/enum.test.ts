@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { z } from "zod";
-import { createParser } from "../src/parser";
+import { createParser } from "../src";
 
 const parser = createParser();
 
