@@ -105,59 +105,142 @@ function extractMarkdownCodeBlocks(input: string): Value[] {
   return blocks;
 }
 
-function extractJsonPatterns(input: string): Value[] {
+function extractCompleteObjectsFromText(input: string): Value[] {
   const candidates: Value[] = [];
+  const stack: number[] = [];
+  let start = -1;
   
-  // Extract complete object-like patterns: {"key": "value"}
-  const objectRegex = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g;
-  let match;
-  while ((match = objectRegex.exec(input)) !== null) {
-    const jsonStr = match[0];
-    try {
-      const parsed = JSON.parse(jsonStr);
-      candidates.push(createValueFromParsed(parsed));
-    } catch {
-      // Try with comprehensive fixes
-      try {
-        const fixed = fixJson(jsonStr);
-        const parsed = JSON.parse(fixed);
-        candidates.push(createValueFromParsed(parsed));
-      } catch {
-        // Try with state machine parser
-        try {
-          const { value } = parseWithStateMachine(jsonStr);
-          candidates.push(value);
-        } catch {
-          // Store as string for further processing
-          candidates.push(createStringValue(jsonStr));
+  for (let i = 0; i < input.length; i++) {
+    const char = input[i];
+    
+    if (char === '{') {
+      if (stack.length === 0) {
+        start = i;
+      }
+      stack.push(i);
+    } else if (char === '}') {
+      if (stack.length > 0) {
+        stack.pop();
+        if (stack.length === 0 && start !== -1) {
+          // Found a complete object
+          const jsonStr = input.slice(start, i + 1);
+          try {
+            const parsed = JSON.parse(jsonStr);
+            candidates.push(createValueFromParsed(parsed));
+          } catch {
+            // Try with comprehensive fixes
+            try {
+              const fixed = fixJson(jsonStr);
+              const parsed = JSON.parse(fixed);
+              candidates.push(createValueFromParsed(parsed));
+            } catch {
+              // Try with state machine parser
+              try {
+                const { value } = parseWithStateMachine(jsonStr);
+                candidates.push(value);
+              } catch {
+                // Store as string for further processing
+                candidates.push(createStringValue(jsonStr));
+              }
+            }
+          }
+          start = -1;
         }
       }
     }
   }
   
-  // Extract incomplete object-like patterns: {"key": "value (no closing brace)
-  const incompleteObjectRegex = /\{[^{}]*$/g;
-  let incompleteMatch;
-  while ((incompleteMatch = incompleteObjectRegex.exec(input)) !== null) {
-    const jsonStr = incompleteMatch[0];
-    try {
-      const fixed = fixJson(jsonStr);
-      const parsed = JSON.parse(fixed);
-      candidates.push(createValueFromParsed(parsed));
-    } catch {
-      // Try with state machine parser
-      try {
-        const { value } = parseWithStateMachine(jsonStr);
-        candidates.push(value);
-      } catch {
-        // Store as string
-        candidates.push(createStringValue(jsonStr));
+  return candidates;
+}
+
+function extractIncompleteObjectsFromText(input: string): Value[] {
+  const candidates: Value[] = [];
+  
+  // Find all positions where objects start but don't have matching closing braces
+  for (let i = 0; i < input.length; i++) {
+    if (input[i] === '{') {
+      // Check if this is an incomplete object by finding the end of meaningful JSON
+      const possibleJson = findMeaningfulJsonEnd(input.slice(i));
+      if (possibleJson) {
+        try {
+          const fixed = fixJson(possibleJson);
+          const parsed = JSON.parse(fixed);
+          candidates.push(createValueFromParsed(parsed));
+          break; // Only take the first meaningful incomplete object
+        } catch {
+          // Try with state machine parser
+          try {
+            const { value } = parseWithStateMachine(possibleJson);
+            candidates.push(value);
+            break;
+          } catch {
+            // Continue to next position
+          }
+        }
       }
     }
   }
   
+  return candidates;
+}
+
+function findMeaningfulJsonEnd(jsonStr: string): string | null {
+  let depth = 0;
+  let inString = false;
+  let stringChar = '';
+  let lastMeaningfulPos = 0;
+  
+  for (let i = 0; i < jsonStr.length; i++) {
+    const char = jsonStr[i];
+    const prevChar = i > 0 ? jsonStr[i-1] : '';
+    
+    if (!inString && (char === '"' || char === "'")) {
+      inString = true;
+      stringChar = char;
+    } else if (inString && char === stringChar && prevChar !== '\\') {
+      inString = false;
+      stringChar = '';
+    } else if (!inString) {
+      if (char === '{') {
+        depth++;
+      } else if (char === '}') {
+        depth--;
+        if (depth === 0) {
+          // Found complete object, not what we're looking for
+          return null;
+        }
+      } else if (char === ':' || char === ',' || char === '"' || char === "'" || /[a-zA-Z0-9_]/.test(char)) {
+        // This is a meaningful JSON character
+        lastMeaningfulPos = i;
+      } else if (depth > 0 && /[a-zA-Z]/.test(char) && !/[{}:,"'\s]/.test(jsonStr[i-1] || '')) {
+        // Looks like we've hit non-JSON text (like "Anything else...")
+        break;
+      }
+    }
+  }
+  
+  if (depth > 0 && lastMeaningfulPos > 0) {
+    // We have unmatched braces and found meaningful content
+    return jsonStr.slice(0, lastMeaningfulPos + 1);
+  }
+  
+  return null;
+}
+
+function extractJsonPatterns(input: string): Value[] {
+  const candidates: Value[] = [];
+  
+  // Extract complete object-like patterns: {"key": "value"} with proper nested brace handling
+  const completeObjects = extractCompleteObjectsFromText(input);
+  candidates.push(...completeObjects);
+  
+  // Extract incomplete object-like patterns with smart boundaries
+  const incompleteObjects = extractIncompleteObjectsFromText(input);
+  candidates.push(...incompleteObjects);
+  
   // Extract complete array-like patterns: [1, 2, 3] and malformed ones like [hello, world]
   const arrayRegex = /\[[a-zA-Z0-9_\s,'".:;!\?\-\(\)\{\}]*\]/g;
+  let match;
   while ((match = arrayRegex.exec(input)) !== null) {
     const jsonStr = match[0];
     try {
