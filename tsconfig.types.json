@@ -5,9 +5,9 @@
         "emitDeclarationOnly": true,
         "declaration": true,
         "outDir": "./dist",
-        "rootDir": "./src",
+        "rootDir": "./jsonish/src",
     },
     "include": [
-        "src/**/*.ts"
+        "jsonish/src/**/*.ts"
     ]
 }
