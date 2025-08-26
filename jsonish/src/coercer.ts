@@ -11,6 +11,19 @@ export function coerceToString(value: Value, schema: z.ZodString): string {
       return value.value.toString();
     case 'null':
       return 'null';
+    case 'object':
+      // Convert object to TypeScript interface-like string representation
+      const objectPairs: string[] = [];
+      for (const [key, val] of value.entries) {
+        const valueStr = valueToTypeScriptString(val);
+        objectPairs.push(`${key}: ${valueStr}`);
+      }
+      return `{${objectPairs.join(', ')}}`;
+    
+    case 'array':
+      // Convert array to JSON string representation
+      const arrayValues = value.elements.map(element => getValueAsJavaScript(element));
+      return JSON.stringify(arrayValues);
     default:
       throw new Error(`Cannot coerce ${value.type} to string`);
   }
@@ -142,4 +155,53 @@ export function extractFromText(input: string, schema: z.ZodType): Value | null 
 
 export function isSchemaType<T extends z.ZodType>(schema: z.ZodType, type: new (...args: any[]) => T): schema is T {
   return schema instanceof type;
+}
+
+function getValueAsJavaScript(value: Value): any {
+  switch (value.type) {
+    case 'string':
+      return value.value;
+    case 'number':
+      return value.value;
+    case 'boolean':
+      return value.value;
+    case 'null':
+      return null;
+    case 'object':
+      const obj: Record<string, any> = {};
+      for (const [key, val] of value.entries) {
+        obj[key] = getValueAsJavaScript(val);
+      }
+      return obj;
+    case 'array':
+      return value.elements.map(element => getValueAsJavaScript(element));
+    default:
+      return null;
+  }
+}
+
+function valueToTypeScriptString(value: Value): string {
+  switch (value.type) {
+    case 'string':
+      // Don't add quotes - return the string value as-is for TypeScript interface syntax
+      return value.value;
+    case 'number':
+      return value.value.toString();
+    case 'boolean':
+      return value.value.toString();
+    case 'null':
+      return 'null';
+    case 'object':
+      const objectPairs: string[] = [];
+      for (const [key, val] of value.entries) {
+        const valueStr = valueToTypeScriptString(val);
+        objectPairs.push(`${key}: ${valueStr}`);
+      }
+      return `{${objectPairs.join(', ')}}`;
+    case 'array':
+      const arrayValues = value.elements.map(element => valueToTypeScriptString(element));
+      return `[${arrayValues.join(', ')}]`;
+    default:
+      return 'unknown';
+  }
 }

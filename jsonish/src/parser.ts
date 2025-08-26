@@ -3,9 +3,18 @@ import { Value, createStringValue, createValueFromParsed } from './value.js';
 import { coerceToString, coerceToNumber, coerceToBoolean, extractFromText, isSchemaType } from './coercer.js';
 import { fixJson, parseWithAdvancedFixing } from './fixing-parser.js';
 import { extractJsonFromText, extractMultipleObjects } from './extractors.js';
+import type { ParseOptions } from './index.js';
 
-export function parseBasic<T extends z.ZodType>(input: string, schema: T): z.infer<T> {
+// Semantic alias mappings for field names
+const SEMANTIC_ALIASES: Record<string, string[]> = {
+  'signature': ['function_signature', 'func_signature', 'method_signature'],
+  'description': ['desc', 'details', 'summary'],
+  'properties': ['props', 'attributes', 'fields'],
+};
+
+export function parseBasic<T extends z.ZodType>(input: string, schema: T, options?: ParseOptions): z.infer<T> {
   const ctx = createParsingContext();
+  
   
   // String Schema Priority: Always return raw input when targeting string
   if (schema instanceof z.ZodString) {
@@ -91,9 +100,259 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T): z.inf
     throw error;
   }
   
-  // Strategy 6: String fallback with type coercion
+  // Strategy 6: Partial parsing for incomplete JSON (if allowPartial is enabled)
+  if (options?.allowPartial && (schema instanceof z.ZodObject || schema instanceof z.ZodArray)) {
+    try {
+      return parsePartialValue(input, schema, ctx);
+    } catch {
+      // Continue to string fallback if partial parsing fails
+    }
+  }
+  
+  // Strategy 7: String fallback with type coercion
   const stringValue = createStringValue(input);
   return coerceValue(stringValue, schema, ctx);
+}
+
+function parsePartialValue<T extends z.ZodType>(input: string, schema: T, ctx: ParsingContext): z.infer<T> {
+  // For partial parsing, we try to extract whatever valid JSON we can from the incomplete input
+  // and then fill missing fields with defaults
+  
+  if (schema instanceof z.ZodObject) {
+    return parsePartialObject(input, schema, ctx) as z.infer<T>;
+  }
+  
+  if (schema instanceof z.ZodArray) {
+    return parsePartialArray(input, schema, ctx) as z.infer<T>;
+  }
+  
+  throw new Error('Partial parsing only supported for objects and arrays');
+}
+
+function parsePartialObject<T extends z.ZodObject<any>>(input: string, schema: T, ctx: ParsingContext): z.infer<T> {
+  const shape = schema.shape;
+  const result: Record<string, any> = {};
+  
+  // Try to extract whatever JSON we can from the incomplete input
+  let partialData: any = {};
+  
+  // First, try to extract using state machine parsing which is more forgiving
+  try {
+    const { value } = parseWithAdvancedFixing(input);
+    if (value.type === 'object') {
+      // Convert Value to JavaScript object
+      for (const [key, val] of value.entries) {
+        partialData[key] = getValueAsJS(val);
+      }
+    }
+  } catch {
+    // If that fails, try more aggressive partial parsing
+    try {
+      partialData = parseIncompleteJson(input);
+    } catch {
+      // Last resort: create empty object
+      partialData = {};
+    }
+  }
+  
+  // Fill the result with available data and defaults for missing fields
+  for (const [key, fieldSchema] of Object.entries(shape)) {
+    if (key in partialData) {
+      try {
+        // Try to coerce the available value
+        const partialValue = createValueFromParsed(partialData[key]);
+        result[key] = coerceValue(partialValue, fieldSchema as z.ZodType, ctx);
+      } catch {
+        // If direct coercion fails, try partial parsing for complex types
+        if (fieldSchema instanceof z.ZodArray && partialData[key] && Array.isArray(partialData[key])) {
+          // Handle partial arrays - each element might be incomplete
+          const partialArray = partialData[key];
+          const validElements = [];
+          
+          for (const element of partialArray) {
+            try {
+              if (typeof element === 'object' && element !== null) {
+                // Try to parse partial object within the array
+                const elementValue = createValueFromParsed(element);
+                const coercedElement = coerceValue(elementValue, fieldSchema.element, ctx);
+                validElements.push(coercedElement);
+              } else {
+                // For non-object elements, just try direct coercion
+                const elementValue = createValueFromParsed(element);
+                const coercedElement = coerceValue(elementValue, fieldSchema.element, ctx);
+                validElements.push(coercedElement);
+              }
+            } catch {
+              // If element coercion fails but element schema is object, try partial object parsing
+              if (fieldSchema.element instanceof z.ZodObject && typeof element === 'object' && element !== null) {
+                try {
+                  const partialElementResult = parsePartialObjectFromData(element, fieldSchema.element, ctx);
+                  validElements.push(partialElementResult);
+                } catch {
+                  // Skip this element if we can't parse it at all
+                }
+              }
+            }
+          }
+          result[key] = validElements;
+        } else {
+          // If coercion fails, use default
+          result[key] = getDefaultValue(fieldSchema as z.ZodType);
+        }
+      }
+    } else {
+      // Field is missing, use default
+      result[key] = getDefaultValue(fieldSchema as z.ZodType);
+    }
+  }
+  
+  return result as z.infer<T>;
+}
+
+function parsePartialObjectFromData<T extends z.ZodObject<any>>(data: any, schema: T, ctx: ParsingContext): z.infer<T> {
+  // Parse a partial object from already-extracted JS data
+  const shape = schema.shape;
+  const result: Record<string, any> = {};
+  
+  for (const [key, fieldSchema] of Object.entries(shape)) {
+    if (key in data) {
+      try {
+        const fieldValue = createValueFromParsed(data[key]);
+        result[key] = coerceValue(fieldValue, fieldSchema as z.ZodType, ctx);
+      } catch {
+        result[key] = getDefaultValue(fieldSchema as z.ZodType);
+      }
+    } else {
+      result[key] = getDefaultValue(fieldSchema as z.ZodType);
+    }
+  }
+  
+  return result as z.infer<T>;
+}
+
+function parsePartialArray<T extends z.ZodArray<any>>(input: string, schema: T, ctx: ParsingContext): z.infer<T> {
+  // For partial arrays, return empty array if we can't parse anything
+  try {
+    // Try to extract objects from the incomplete array
+    const objects = extractMultipleObjects(input);
+    const validObjects = objects.filter(obj => {
+      try {
+        coerceValue(obj, schema.element, ctx);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    
+    return validObjects.map(obj => coerceValue(obj, schema.element, ctx)) as z.infer<T>;
+  } catch {
+    // Return empty array if we can't parse anything
+    return [] as z.infer<T>;
+  }
+}
+
+function getDefaultValue(schema: z.ZodType): any {
+  // Handle nullable and optional wrappers first
+  if (schema instanceof z.ZodNullable) return null;
+  if (schema instanceof z.ZodOptional) return undefined;
+  
+  // Handle base types
+  if (schema instanceof z.ZodString) return '';
+  if (schema instanceof z.ZodNumber) return 0;
+  if (schema instanceof z.ZodBoolean) return false;
+  if (schema instanceof z.ZodArray) return [];
+  if (schema instanceof z.ZodObject) return {};
+  if (schema instanceof z.ZodNull) return null;
+  
+  return null;
+}
+
+function parseIncompleteJson(input: string): any {
+  // More aggressive parsing for incomplete JSON
+  // This handles cases like: { "key": [ { "nested": 123,
+  
+  let workingJson = input.trim();
+  
+  // Track the opening structure stack to close in reverse order
+  const structureStack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  
+  for (let i = 0; i < workingJson.length; i++) {
+    const char = workingJson[i];
+    
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    
+    if (char === '"' && !escaped) {
+      inString = !inString;
+      continue;
+    }
+    
+    if (!inString) {
+      if (char === '{') {
+        structureStack.push('}');
+      } else if (char === '[') {
+        structureStack.push(']');
+      } else if (char === '}') {
+        // Remove the matching opening brace from stack
+        if (structureStack[structureStack.length - 1] === '}') {
+          structureStack.pop();
+        }
+      } else if (char === ']') {
+        // Remove the matching opening bracket from stack
+        if (structureStack[structureStack.length - 1] === ']') {
+          structureStack.pop();
+        }
+      }
+    }
+  }
+  
+  // Remove trailing comma if present before closing structures
+  workingJson = workingJson.trim();
+  if (workingJson.endsWith(',')) {
+    workingJson = workingJson.slice(0, -1).trim();
+  }
+  
+  // Close structures in reverse order (LIFO)
+  while (structureStack.length > 0) {
+    workingJson += structureStack.pop();
+  }
+  
+  // Try to parse the completed JSON
+  try {
+    return JSON.parse(workingJson);
+  } catch {
+    // If that fails, try with basic JSON fixing
+    const fixed = fixJson(workingJson);
+    return JSON.parse(fixed);
+  }
+}
+
+function getValueAsJS(value: Value): any {
+  switch (value.type) {
+    case 'string': return value.value;
+    case 'number': return value.value;
+    case 'boolean': return value.value;
+    case 'null': return null;
+    case 'object': 
+      const obj: Record<string, any> = {};
+      for (const [key, val] of value.entries) {
+        obj[key] = getValueAsJS(val);
+      }
+      return obj;
+    case 'array':
+      return value.elements.map(el => getValueAsJS(el));
+    default:
+      return null;
+  }
 }
 
 // Parsing context for circular reference detection
@@ -137,6 +396,10 @@ function coerceValue<T extends z.ZodType>(value: Value, schema: T, ctx: ParsingC
   
   if (schema instanceof z.ZodUnion) {
     return coerceUnion(value, schema, ctx) as z.infer<T>;
+  }
+  
+  if (schema instanceof z.ZodDiscriminatedUnion) {
+    return coerceDiscriminatedUnion(value, schema, ctx) as z.infer<T>;
   }
   
   if (schema instanceof z.ZodArray) {
@@ -209,9 +472,17 @@ function findBestFieldMatch(inputKey: string, schemaKeys: string[]): FieldMatchR
 }
 
 function findAliasMatch(inputKey: string, schemaKeys: string[]): string | null {
-  // Convert input key to different formats and check for matches
   const normalized = inputKey.toLowerCase().trim();
   
+  // PRIORITY 1: Check semantic aliases first (highest confidence)
+  for (const schemaKey of schemaKeys) {
+    const aliases = SEMANTIC_ALIASES[schemaKey.toLowerCase()];
+    if (aliases && aliases.includes(normalized)) {
+      return schemaKey;
+    }
+  }
+  
+  // PRIORITY 2: Check format-based aliases (lower confidence)
   for (const schemaKey of schemaKeys) {
     const schemaKeyNormalized = schemaKey.toLowerCase();
     
@@ -401,5 +672,47 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
   
   // For now, return the first successful result
   // TODO: Implement scoring system like in Rust version
+  return results[0].result as z.infer<T>;
+}
+
+function coerceDiscriminatedUnion<T extends z.ZodDiscriminatedUnion<any, any>>(value: Value, schema: T, ctx: ParsingContext): z.infer<T> {
+  // For discriminated unions, we can optimize by checking the discriminator field first
+  if (value.type === 'object') {
+    const discriminator = schema._def.discriminator;
+    const discriminatorEntry = value.entries.find(([k, v]) => k === discriminator);
+    
+    if (discriminatorEntry) {
+      const discriminatorValue = discriminatorEntry[1].value;
+      
+      // Find the option that matches this discriminator value
+      const options = schema._def.options as Map<any, z.ZodObject<any>>;
+      const matchingOption = options.get(discriminatorValue);
+      
+      if (matchingOption) {
+        try {
+          return coerceValue(value, matchingOption, ctx) as z.infer<T>;
+        } catch (error) {
+          // If the matching option fails, fall through to try all options
+        }
+      }
+    }
+  }
+  
+  // Fallback: try all options like regular union
+  const options = Array.from(schema._def.options.values());
+  const results = [];
+  for (const option of options) {
+    try {
+      const result = coerceValue(value, option, ctx);
+      results.push({ result, option });
+    } catch {
+      continue;
+    }
+  }
+  
+  if (results.length === 0) {
+    throw new Error(`No discriminated union option matched value: ${JSON.stringify(coerceValueGeneric(value))}`);
+  }
+  
   return results[0].result as z.infer<T>;
 }

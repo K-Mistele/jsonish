@@ -18,24 +18,68 @@ export function extractJsonFromText(input: string): Value[] {
 export function extractMultipleObjects(input: string): Value[] {
   const objects: Value[] = [];
   
+  // DEBUG: Log when this function is called with function_signature
+  if (input.includes('function_signature')) {
+    console.log('=== extractMultipleObjects called ===');
+  }
+  
   // Find multiple object patterns
   const objectRegex = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g;
   let match;
   while ((match = objectRegex.exec(input)) !== null) {
     const jsonStr = match[0];
+    
+    // DEBUG: Log extracted object
+    if (input.includes('function_signature')) {
+      console.log('Extracted object jsonStr length:', jsonStr.length);
+      console.log('Contains function_signature:', jsonStr.includes('function_signature'));
+    }
+    
     try {
       const parsed = JSON.parse(jsonStr);
+      
+      // DEBUG: Log successful direct parse
+      if (input.includes('function_signature')) {
+        console.log('Direct JSON.parse succeeded');
+        if (parsed.function_signature) {
+          console.log('Direct parse function_signature:', JSON.stringify(parsed.function_signature));
+        }
+      }
+      
       objects.push(createValueFromParsed(parsed));
     } catch {
       // Try with basic fixes
       try {
         const fixed = basicJsonFix(jsonStr);
         const parsed = JSON.parse(fixed);
+        
+        // DEBUG: Log fixed parse
+        if (input.includes('function_signature')) {
+          console.log('basicJsonFix + JSON.parse succeeded');
+          if (parsed.function_signature) {
+            console.log('Fixed parse function_signature:', JSON.stringify(parsed.function_signature));
+          }
+        }
+        
         objects.push(createValueFromParsed(parsed));
       } catch {
         // Try with state machine parser
         try {
           const { value } = parseWithStateMachine(jsonStr);
+          
+          // DEBUG: Log state machine parse
+          if (input.includes('function_signature')) {
+            console.log('State machine parse succeeded');
+            console.log('Value type:', value.type);
+            if (value.type === 'object' && value.entries) {
+              const funcSigEntry = value.entries.find(([k, v]) => k === 'function_signature');
+              if (funcSigEntry) {
+                console.log('State machine function_signature:', JSON.stringify(funcSigEntry[1].value));
+                console.log('State machine function_signature length:', funcSigEntry[1].value.length);
+              }
+            }
+          }
+          
           objects.push(value);
         } catch {
           // Skip invalid objects
@@ -161,6 +205,8 @@ function extractJsonPatterns(input: string): Value[] {
       try {
         const fixed = basicJsonFix(jsonStr);
         const parsed = JSON.parse(fixed);
+        
+        
         candidates.push(createValueFromParsed(parsed));
       } catch {
         // Store as string
@@ -193,6 +239,7 @@ function extractJsonPatterns(input: string): Value[] {
 }
 
 function basicJsonFix(input: string): string {
+  
   let fixed = input;
   
   // Handle triple-quoted strings first
@@ -200,18 +247,13 @@ function basicJsonFix(input: string): string {
     return `"${content.replace(/"/g, '\\"')}"`;
   });
   
-  // Fix unquoted keys: {key: "value"} → {"key": "value"}
-  fixed = fixed.replace(/(\{|\s)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":');
+  // Fix unquoted string values using sophisticated approach FIRST
+  // This must come before key fixing to avoid corrupting function signatures
+  fixed = fixComplexUnquotedValues(fixed);
   
-  // Fix unquoted string values (more sophisticated)
-  fixed = fixed.replace(/:\s*([a-zA-Z_][a-zA-Z0-9_\s]+?)(\s*[,}])/g, (match, value, ending) => {
-    const trimmed = value.trim();
-    // Don't quote numbers, booleans, or null
-    if (/^(true|false|null|\d+(\.\d+)?)$/i.test(trimmed)) {
-      return `: ${trimmed}${ending}`;
-    }
-    return `: "${trimmed}"${ending}`;
-  });
+  // Then fix unquoted keys: {key: "value"} → {"key": "value"}
+  // But be more careful to only match actual object keys, not colons inside quoted strings
+  fixed = fixUnquotedKeys(fixed);
   
   // Fix trailing commas
   fixed = fixed.replace(/,\s*]/g, ']');
@@ -230,6 +272,125 @@ function basicJsonFix(input: string): string {
     fixed += stack.pop();
   }
   
+  
   return fixed;
+}
+
+function fixUnquotedKeys(input: string): string {
+  let result = '';
+  let i = 0;
+  let inQuotes = false;
+  let quoteChar = '';
+  
+  while (i < input.length) {
+    const char = input[i];
+    
+    // Track quoted strings to avoid processing content inside them
+    if (!inQuotes && (char === '"' || char === "'")) {
+      inQuotes = true;
+      quoteChar = char;
+      result += char;
+    } else if (inQuotes && char === quoteChar) {
+      // Check for escape character
+      if (i > 0 && input[i-1] !== '\\') {
+        inQuotes = false;
+        quoteChar = '';
+      }
+      result += char;
+    } else if (!inQuotes) {
+      // Only fix unquoted keys when we're not inside a quoted string
+      if (char === '{' || /\s/.test(char)) {
+        result += char;
+        // Look ahead for unquoted key pattern
+        let j = i + 1;
+        while (j < input.length && /\s/.test(input[j])) j++; // Skip whitespace
+        
+        if (j < input.length && /[a-zA-Z_]/.test(input[j])) {
+          // Found start of potential key
+          const keyStart = j;
+          while (j < input.length && /[a-zA-Z0-9_]/.test(input[j])) j++;
+          
+          // Check if followed by colon (with possible whitespace)
+          let k = j;
+          while (k < input.length && /\s/.test(input[k])) k++;
+          
+          if (k < input.length && input[k] === ':') {
+            // This is an unquoted key, add quotes
+            const key = input.slice(keyStart, j);
+            result += input.slice(i + 1, keyStart) + `"${key}"`;
+            i = j - 1; // -1 because loop will increment
+          }
+        }
+      } else {
+        result += char;
+      }
+    } else {
+      result += char;
+    }
+    
+    i++;
+  }
+  
+  return result;
+}
+
+function fixComplexUnquotedValues(input: string): string {
+  let result = '';
+  let i = 0;
+  
+  while (i < input.length) {
+    // Look for pattern: ": <unquoted value>"
+    if (i > 0 && input[i-1] === ':' && /\s/.test(input[i])) {
+      // Skip whitespace after colon
+      while (i < input.length && /\s/.test(input[i])) {
+        result += input[i];
+        i++;
+      }
+      
+      if (i >= input.length) break;
+      
+      // Check if we need to quote this value
+      const valueStart = i;
+      let valueEnd = valueStart;
+      let parenDepth = 0;
+      let braceDepth = 0;
+      let bracketDepth = 0;
+      
+      // Find the end of the unquoted value, respecting balanced delimiters
+      while (valueEnd < input.length) {
+        const char = input[valueEnd];
+        
+        if (char === '(') parenDepth++;
+        else if (char === ')') parenDepth--;
+        else if (char === '{') braceDepth++;
+        else if (char === '}') braceDepth--;
+        else if (char === '[') bracketDepth++;
+        else if (char === ']') bracketDepth--;
+        else if ((char === ',' || char === '}' || char === ']') && parenDepth === 0 && braceDepth === 0 && bracketDepth === 0) {
+          // Found the end of the value
+          break;
+        }
+        
+        valueEnd++;
+      }
+      
+      const value = input.slice(valueStart, valueEnd).trim();
+      
+      // Don't quote numbers, booleans, or null
+      if (/^(true|false|null|\d+(\.\d+)?)$/i.test(value)) {
+        result += value;
+      } else if (value.length > 0) {
+        // Quote the value and escape any internal quotes
+        result += `"${value.replace(/"/g, '\\"')}"`;
+      }
+      
+      i = valueEnd;
+    } else {
+      result += input[i];
+      i++;
+    }
+  }
+  
+  return result;
 }
 

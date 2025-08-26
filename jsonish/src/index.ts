@@ -1,6 +1,4 @@
-import z from 'zod'
-
-const exampleSchema = z.object({ name: z.string() })
+import type z from 'zod'
 
 /**
  * The main entrypoint for the parser
@@ -8,21 +6,25 @@ const exampleSchema = z.object({ name: z.string() })
  * @param schema
  * @returns
  */
-import { z } from 'zod';
-import { parseBasic } from './parser.js';
+import { parseBasic } from './parser.js'
+
+export interface ParseOptions {
+    allowPartial?: boolean;
+    allowMalformed?: boolean;
+}
 
 export interface Parser {
-  parse<T extends z.ZodType>(input: string, schema: T): z.infer<T>;
+    parse<T extends z.ZodType>(input: string, schema: T, options?: ParseOptions): z.infer<T>
 }
 
 export function createParser(): Parser {
-  return {
-    parse<T extends z.ZodType>(input: string, schema: T): z.infer<T> {
-      return parseBasic(input, schema);
+    return {
+        parse<T extends z.ZodType>(input: string, schema: T, options?: ParseOptions): z.infer<T> {
+            return parseBasic(input, schema, options)
+        }
     }
-  };
 }
 
-export function parse<T extends z.ZodType>(input: string, schema: T): z.infer<T> {
-  return createParser().parse(input, schema);
+export function parse<T extends z.ZodType>(input: string, schema: T, options?: ParseOptions): z.infer<T> {
+    return createParser().parse(input, schema, options)
 }

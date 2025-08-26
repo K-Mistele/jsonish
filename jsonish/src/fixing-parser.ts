@@ -4,23 +4,19 @@ import { Value } from './value.js';
 export function fixJson(input: string): string {
   let fixed = input.trim();
   
+  
   // Handle triple-quoted strings: """content""" → "content"
   fixed = fixed.replace(/"""([\s\S]*?)"""/g, (match, content) => {
     return `"${content.replace(/"/g, '\\"')}"`;
   });
   
-  // Fix unquoted keys: {key: "value"} → {"key": "value"}
-  fixed = fixed.replace(/(\{|\s)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":');
+  // Fix unquoted string values (but not numbers/booleans) FIRST
+  // This must come before key fixing to avoid corrupting function signatures
+  fixed = fixComplexUnquotedValues(fixed);
   
-  // Fix unquoted string values (but not numbers/booleans)
-  fixed = fixed.replace(/:\s*([a-zA-Z_][a-zA-Z0-9_\s]+?)(\s*[,}])/g, (match, value, ending) => {
-    // Don't quote if it looks like a boolean or number
-    const trimmed = value.trim();
-    if (/^(true|false|null|\d+(\.\d+)?)$/i.test(trimmed)) {
-      return `: ${trimmed}${ending}`;
-    }
-    return `: "${trimmed}"${ending}`;
-  });
+  // Then fix unquoted keys: {key: "value"} → {"key": "value"}
+  // But be more careful to only match actual object keys, not colons inside quoted strings
+  fixed = fixUnquotedKeys(fixed);
   
   // Fix trailing commas in arrays: [1,2,3,] → [1,2,3]
   fixed = fixed.replace(/,\s*]/g, ']');
@@ -35,7 +31,126 @@ export function fixJson(input: string): string {
   fixed = autoCloseBrackets(fixed);
   fixed = autoCloseQuotes(fixed);
   
+  
   return fixed;
+}
+
+function fixUnquotedKeys(input: string): string {
+  let result = '';
+  let i = 0;
+  let inQuotes = false;
+  let quoteChar = '';
+  
+  while (i < input.length) {
+    const char = input[i];
+    
+    // Track quoted strings to avoid processing content inside them
+    if (!inQuotes && (char === '"' || char === "'")) {
+      inQuotes = true;
+      quoteChar = char;
+      result += char;
+    } else if (inQuotes && char === quoteChar) {
+      // Check for escape character
+      if (i > 0 && input[i-1] !== '\\') {
+        inQuotes = false;
+        quoteChar = '';
+      }
+      result += char;
+    } else if (!inQuotes) {
+      // Only fix unquoted keys when we're not inside a quoted string
+      if (char === '{' || /\s/.test(char)) {
+        result += char;
+        // Look ahead for unquoted key pattern
+        let j = i + 1;
+        while (j < input.length && /\s/.test(input[j])) j++; // Skip whitespace
+        
+        if (j < input.length && /[a-zA-Z_]/.test(input[j])) {
+          // Found start of potential key
+          const keyStart = j;
+          while (j < input.length && /[a-zA-Z0-9_]/.test(input[j])) j++;
+          
+          // Check if followed by colon (with possible whitespace)
+          let k = j;
+          while (k < input.length && /\s/.test(input[k])) k++;
+          
+          if (k < input.length && input[k] === ':') {
+            // This is an unquoted key, add quotes
+            const key = input.slice(keyStart, j);
+            result += input.slice(i + 1, keyStart) + `"${key}"`;
+            i = j - 1; // -1 because loop will increment
+          }
+        }
+      } else {
+        result += char;
+      }
+    } else {
+      result += char;
+    }
+    
+    i++;
+  }
+  
+  return result;
+}
+
+function fixComplexUnquotedValues(input: string): string {
+  let result = '';
+  let i = 0;
+  
+  while (i < input.length) {
+    // Look for pattern: ": <unquoted value>"
+    if (i > 0 && input[i-1] === ':' && /\s/.test(input[i])) {
+      // Skip whitespace after colon
+      while (i < input.length && /\s/.test(input[i])) {
+        result += input[i];
+        i++;
+      }
+      
+      if (i >= input.length) break;
+      
+      // Check if we need to quote this value
+      const valueStart = i;
+      let valueEnd = valueStart;
+      let parenDepth = 0;
+      let braceDepth = 0;
+      let bracketDepth = 0;
+      
+      // Find the end of the unquoted value, respecting balanced delimiters
+      while (valueEnd < input.length) {
+        const char = input[valueEnd];
+        
+        if (char === '(') parenDepth++;
+        else if (char === ')') parenDepth--;
+        else if (char === '{') braceDepth++;
+        else if (char === '}') braceDepth--;
+        else if (char === '[') bracketDepth++;
+        else if (char === ']') bracketDepth--;
+        else if ((char === ',' || char === '}' || char === ']') && parenDepth === 0 && braceDepth === 0 && bracketDepth === 0) {
+          // Found the end of the value
+          break;
+        }
+        
+        valueEnd++;
+      }
+      
+      const value = input.slice(valueStart, valueEnd).trim();
+      
+      // Don't quote numbers, booleans, or null
+      if (/^(true|false|null|\d+(\.\d+)?)$/i.test(value)) {
+        result += value;
+      } else if (value.length > 0) {
+        // Quote the value and escape any internal quotes
+        result += `"${value.replace(/"/g, '\\"')}"`;
+      }
+      
+      i = valueEnd;
+    } else {
+      result += input[i];
+      i++;
+    }
+  }
+  
+  return result;
 }
 
 function fixMixedQuotes(input: string): string {

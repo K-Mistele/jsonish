@@ -422,13 +422,26 @@ function parseUnquotedString(input: string, state: ParseState): ParseResult {
             }
           } else if (/[a-zA-Z_]/.test(nextChar)) {
             // Look for colon after unquoted identifier
+            // But be careful about function signatures with parameters like "page: number"
             let identEnd = lookAhead;
             while (identEnd < input.length && /[a-zA-Z0-9_\s]/.test(input[identEnd])) {
               identEnd++;
             }
             if (identEnd < input.length && input[identEnd] === ':') {
-              // This is definitely a new field
-              break;
+              // Check if we're inside parentheses (function signature parameters)
+              let parenDepth = 0;
+              let checkPos = startPos;
+              while (checkPos < lookAhead) {
+                if (input[checkPos] === '(') parenDepth++;
+                else if (input[checkPos] === ')') parenDepth--;
+                checkPos++;
+              }
+              
+              // If we're inside parentheses, this is likely a function parameter, not a new field
+              if (parenDepth === 0) {
+                // This is definitely a new field
+                break;
+              }
             }
           } else if (nextChar === '}') {
             // End of object
