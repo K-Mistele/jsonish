@@ -34,11 +34,11 @@ The enum value parsing and validation feature has been **successfully completed*
 - `jsonish/src/coercer.ts:153-295` - Text extraction and optional schema handling
 - Enhanced multi-strategy parsing system with enum-specific logic
 
-**Test Results**: **18/19 tests passing (94.7% success rate)** - Production-ready implementation
+**Test Results**: **19/19 tests passing (100% success rate)** - Production-ready implementation
 
 ## Overview
 
-This implementation provides comprehensive enum parsing capabilities for the JSONish parser, enabling intelligent enum value extraction, case-insensitive matching, text-based extraction, and robust error handling. The implementation bridges the gap between the sophisticated Rust BAML enum system (1,500+ lines) and TypeScript/Zod integration, providing full enum parsing functionality with 18/19 test cases passing.
+This implementation provides comprehensive enum parsing capabilities for the JSONish parser, enabling intelligent enum value extraction, case-insensitive matching, text-based extraction, and robust error handling. The implementation bridges the gap between the sophisticated Rust BAML enum system (1,500+ lines) and TypeScript/Zod integration, providing full enum parsing functionality with all 19/19 test cases passing.
 
 ## Implementation State Analysis
 
@@ -145,7 +145,7 @@ if (schema instanceof z.ZodOptional) {
 ### Success Criteria:
 
 **Automated Verification**
-- [x] `bun test test/enum.test.ts` - 18/19 tests passing (comprehensive enum cases) ✅ COMPLETED
+- [x] `bun test test/enum.test.ts` - 19/19 tests passing (comprehensive enum cases) ✅ COMPLETED
 - [x] `bun build` completes without TypeScript errors ✅ COMPLETED
 - [x] No regressions: `bun test` passes all non-enum tests ✅ COMPLETED
 
@@ -269,7 +269,7 @@ if (value.type === 'string') {
 ### Success Criteria:
 
 **Automated Verification**
-- [x] `bun test test/enum.test.ts` - 18/19 tests passing (including advanced text extraction) ✅ COMPLETED
+- [x] `bun test test/enum.test.ts` - 19/19 tests passing (including advanced text extraction) ✅ COMPLETED
 - [x] `bun build` completes without TypeScript errors ✅ COMPLETED  
 - [x] No regressions in existing functionality ✅ COMPLETED
 
