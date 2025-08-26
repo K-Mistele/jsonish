@@ -482,7 +482,7 @@ function getValueAsJS(value: Value): any {
       }
       return obj;
     case 'array':
-      return value.elements.map(el => getValueAsJS(el));
+      return value.items.map(el => getValueAsJS(el));
     default:
       return null;
   }
@@ -788,12 +788,13 @@ function coerceArray<T extends z.ZodArray<any>>(value: Value, schema: T, ctx: Pa
 function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: ParsingContext): z.infer<T> {
   const options = schema._def.options;
   
-  // Try all union options and pick the best match (following Rust best-match pattern)
+  // Try all union options and pick the best match using scoring system
   const results = [];
   for (const option of options) {
     try {
       const result = coerceValue(value, option, ctx);
-      results.push({ result, option });
+      const score = calculateUnionScore(value, option, result);
+      results.push({ result, option, score });
     } catch {
       continue;
     }
@@ -803,8 +804,8 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
     throw new Error(`No union option matched value: ${JSON.stringify(coerceValueGeneric(value))}`);
   }
   
-  // For now, return the first successful result
-  // TODO: Implement scoring system like in Rust version
+  // Sort by score (higher is better) and return the best match
+  results.sort((a, b) => b.score - a.score);
   return results[0].result as z.infer<T>;
 }
 
@@ -848,4 +849,62 @@ function coerceDiscriminatedUnion<T extends z.ZodDiscriminatedUnion<any, any>>(v
   }
   
   return results[0].result as z.infer<T>;
+}
+
+function calculateUnionScore(value: Value, schema: z.ZodType, result: any): number {
+  let score = 0;
+  
+  // Exact type matches get highest score
+  if (schema instanceof z.ZodString) {
+    if (value.type === 'string') {
+      score += 100; // Exact type match
+    } else {
+      score += 10; // Can be coerced to string
+    }
+  } else if (schema instanceof z.ZodNumber) {
+    if (value.type === 'number') {
+      score += 100; // Exact type match
+    } else if (value.type === 'string' && /^\d+(\.\d+)?$/.test(value.value)) {
+      score += 50; // Numeric string
+    } else {
+      score += 10; // Can be coerced to number
+    }
+  } else if (schema instanceof z.ZodBoolean) {
+    if (value.type === 'boolean') {
+      score += 100; // Exact type match
+    } else if (value.type === 'string' && /^(true|false)$/i.test(value.value)) {
+      score += 50; // Boolean string
+    } else {
+      score += 10; // Can be coerced to boolean
+    }
+  } else if (schema instanceof z.ZodNull || schema instanceof z.ZodUndefined) {
+    if (value.type === 'null') {
+      score += 100; // Exact match
+    } else {
+      score += 5; // Lower score for other types
+    }
+  } else if (schema instanceof z.ZodArray) {
+    if (value.type === 'array') {
+      score += 100; // Exact type match
+    } else {
+      score += 20; // Can potentially be converted to array
+    }
+  } else if (schema instanceof z.ZodObject) {
+    if (value.type === 'object') {
+      score += 100; // Exact type match
+    } else {
+      score += 20; // Can potentially be converted to object
+    }
+  }
+  
+  // Bonus for no coercion needed (result type matches schema expectation)
+  if (typeof result === 'string' && schema instanceof z.ZodString) {
+    score += 10;
+  } else if (typeof result === 'number' && schema instanceof z.ZodNumber) {
+    score += 10;
+  } else if (typeof result === 'boolean' && schema instanceof z.ZodBoolean) {
+    score += 10;
+  }
+  
+  return score;
 }

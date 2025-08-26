@@ -10,6 +10,12 @@ export function fixJson(input: string): string {
     return `"${content.replace(/"/g, '\\"')}"`;
   });
   
+  // Fix numbers with commas: -2,000.00 → -2000.00
+  fixed = fixCommaSeparatedNumbers(fixed);
+  
+  // Fix malformed arrays specifically
+  fixed = fixArrayElements(fixed);
+  
   // Fix unquoted string values (but not numbers/booleans) FIRST
   // This must come before key fixing to avoid corrupting function signatures
   fixed = fixComplexUnquotedValues(fixed);
@@ -33,6 +39,91 @@ export function fixJson(input: string): string {
   
   
   return fixed;
+}
+
+function fixCommaSeparatedNumbers(input: string): string {
+  // Fix numbers with commas like -2,000.00 → -2000.00
+  // Be careful not to affect commas that are JSON separators
+  return input.replace(/(-?\d+(?:,\d{3})+(?:\.\d+)?)/g, (match) => {
+    return match.replace(/,/g, '');
+  });
+}
+
+function fixArrayElements(input: string): string {
+  let result = input;
+  
+  // Fix unquoted array elements: [hello, world, test] → ["hello", "world", "test"]
+  result = result.replace(/\[(.*?)\]/g, (match, contents) => {
+    // Don't process if it looks like valid JSON already
+    try {
+      JSON.parse(match);
+      return match; // Already valid, don't change
+    } catch {
+      // Continue with fixing
+    }
+    
+    // Split by commas but preserve quoted strings
+    const elements = [];
+    let current = '';
+    let inQuotes = false;
+    let quoteChar = '';
+    
+    for (let i = 0; i < contents.length; i++) {
+      const char = contents[i];
+      
+      if (!inQuotes && (char === '"' || char === "'")) {
+        inQuotes = true;
+        quoteChar = char;
+        current += char;
+      } else if (inQuotes && char === quoteChar && (i === 0 || contents[i-1] !== '\\')) {
+        inQuotes = false;
+        quoteChar = '';
+        current += char;
+      } else if (!inQuotes && char === ',') {
+        elements.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    
+    if (current.trim()) {
+      elements.push(current.trim());
+    }
+    
+    // Quote unquoted elements and normalize quotes
+    const fixedElements = elements.map(element => {
+      element = element.trim();
+      if (!element) return element;
+      
+      // Already properly quoted?
+      if (element.startsWith('"') && element.endsWith('"')) {
+        return element; // Keep as-is
+      }
+      
+      // Single quoted? Normalize to double quotes
+      if (element.startsWith("'") && element.endsWith("'")) {
+        return `"${element.slice(1, -1).replace(/"/g, '\\"')}"`;
+      }
+      
+      // Handle escaped quotes: ""a"" → "a"
+      if (element.startsWith('""') && element.endsWith('""') && element.length >= 4) {
+        return `"${element.slice(2, -2)}"`;
+      }
+      
+      // Is it a number, boolean, or null?
+      if (/^(true|false|null|\d+(\.\d+)?)$/i.test(element)) {
+        return element.toLowerCase();
+      }
+      
+      // Quote as string and escape internal quotes
+      return `"${element.replace(/"/g, '\\"')}"`;
+    });
+    
+    return `[${fixedElements.join(', ')}]`;
+  });
+  
+  return result;
 }
 
 function fixUnquotedKeys(input: string): string {
@@ -108,42 +199,48 @@ function fixComplexUnquotedValues(input: string): string {
       
       if (i >= input.length) break;
       
-      // Check if we need to quote this value
-      const valueStart = i;
-      let valueEnd = valueStart;
-      let parenDepth = 0;
-      let braceDepth = 0;
-      let bracketDepth = 0;
-      
-      // Find the end of the unquoted value, respecting balanced delimiters
-      while (valueEnd < input.length) {
-        const char = input[valueEnd];
+      // Check if the value is already quoted
+      if (input[i] === '"' || input[i] === "'") {
+        // Value is already quoted, don't modify it
+        result += input[i];
+      } else {
+        // Check if we need to quote this unquoted value
+        const valueStart = i;
+        let valueEnd = valueStart;
+        let parenDepth = 0;
+        let braceDepth = 0;
+        let bracketDepth = 0;
         
-        if (char === '(') parenDepth++;
-        else if (char === ')') parenDepth--;
-        else if (char === '{') braceDepth++;
-        else if (char === '}') braceDepth--;
-        else if (char === '[') bracketDepth++;
-        else if (char === ']') bracketDepth--;
-        else if ((char === ',' || char === '}' || char === ']') && parenDepth === 0 && braceDepth === 0 && bracketDepth === 0) {
-          // Found the end of the value
-          break;
+        // Find the end of the unquoted value, respecting balanced delimiters
+        while (valueEnd < input.length) {
+          const char = input[valueEnd];
+          
+          if (char === '(') parenDepth++;
+          else if (char === ')') parenDepth--;
+          else if (char === '{') braceDepth++;
+          else if (char === '}') braceDepth--;
+          else if (char === '[') bracketDepth++;
+          else if (char === ']') bracketDepth--;
+          else if ((char === ',' || char === '}' || char === ']') && parenDepth === 0 && braceDepth === 0 && bracketDepth === 0) {
+            // Found the end of the value
+            break;
+          }
+          
+          valueEnd++;
         }
         
-        valueEnd++;
+        const value = input.slice(valueStart, valueEnd).trim();
+        
+        // Don't quote numbers, booleans, or null
+        if (/^(true|false|null|-?\d+(?:\.\d+)?)$/i.test(value)) {
+          result += value;
+        } else if (value.length > 0) {
+          // Quote the value and escape any internal quotes
+          result += `"${value.replace(/"/g, '\\"')}"`;
+        }
+        
+        i = valueEnd - 1; // -1 because the loop will increment
       }
-      
-      const value = input.slice(valueStart, valueEnd).trim();
-      
-      // Don't quote numbers, booleans, or null
-      if (/^(true|false|null|\d+(\.\d+)?)$/i.test(value)) {
-        result += value;
-      } else if (value.length > 0) {
-        // Quote the value and escape any internal quotes
-        result += `"${value.replace(/"/g, '\\"')}"`;
-      }
-      
-      i = valueEnd;
     } else {
       result += input[i];
       i++;

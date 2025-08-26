@@ -22,7 +22,7 @@ export function coerceToString(value: Value, schema: z.ZodString): string {
     
     case 'array':
       // Convert array to JSON string representation
-      const arrayValues = value.elements.map(element => getValueAsJavaScript(element));
+      const arrayValues = value.items.map(element => getValueAsJavaScript(element));
       return JSON.stringify(arrayValues);
     default:
       throw new Error(`Cannot coerce ${value.type} to string`);
@@ -174,7 +174,7 @@ function getValueAsJavaScript(value: Value): any {
       }
       return obj;
     case 'array':
-      return value.elements.map(element => getValueAsJavaScript(element));
+      return value.items.map(element => getValueAsJavaScript(element));
     default:
       return null;
   }
@@ -199,7 +199,7 @@ function valueToTypeScriptString(value: Value): string {
       }
       return `{${objectPairs.join(', ')}}`;
     case 'array':
-      const arrayValues = value.elements.map(element => valueToTypeScriptString(element));
+      const arrayValues = value.items.map(element => valueToTypeScriptString(element));
       return `[${arrayValues.join(', ')}]`;
     default:
       return 'unknown';

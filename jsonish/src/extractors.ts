@@ -1,5 +1,6 @@
 import { Value, createValueFromParsed, createStringValue } from './value.js';
 import { parseWithStateMachine } from './state-machine.js';
+import { fixJson } from './fixing-parser.js';
 
 export function extractJsonFromText(input: string): Value[] {
   const candidates: Value[] = [];
@@ -30,9 +31,9 @@ export function extractMultipleObjects(input: string): Value[] {
       
       objects.push(createValueFromParsed(parsed));
     } catch {
-      // Try with basic fixes
+      // Try with comprehensive fixes
       try {
-        const fixed = basicJsonFix(jsonStr);
+        const fixed = fixJson(jsonStr);
         const parsed = JSON.parse(fixed);
         
         objects.push(createValueFromParsed(parsed));
@@ -116,9 +117,9 @@ function extractJsonPatterns(input: string): Value[] {
       const parsed = JSON.parse(jsonStr);
       candidates.push(createValueFromParsed(parsed));
     } catch {
-      // Try with basic fixes
+      // Try with comprehensive fixes
       try {
-        const fixed = basicJsonFix(jsonStr);
+        const fixed = fixJson(jsonStr);
         const parsed = JSON.parse(fixed);
         candidates.push(createValueFromParsed(parsed));
       } catch {
@@ -140,7 +141,7 @@ function extractJsonPatterns(input: string): Value[] {
   while ((incompleteMatch = incompleteObjectRegex.exec(input)) !== null) {
     const jsonStr = incompleteMatch[0];
     try {
-      const fixed = basicJsonFix(jsonStr);
+      const fixed = fixJson(jsonStr);
       const parsed = JSON.parse(fixed);
       candidates.push(createValueFromParsed(parsed));
     } catch {
@@ -155,24 +156,28 @@ function extractJsonPatterns(input: string): Value[] {
     }
   }
   
-  // Extract complete array-like patterns: [1, 2, 3]
-  const arrayRegex = /\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]/g;
+  // Extract complete array-like patterns: [1, 2, 3] and malformed ones like [hello, world]
+  const arrayRegex = /\[[a-zA-Z0-9_\s,'".:;!\?\-\(\)\{\}]*\]/g;
   while ((match = arrayRegex.exec(input)) !== null) {
     const jsonStr = match[0];
     try {
       const parsed = JSON.parse(jsonStr);
       candidates.push(createValueFromParsed(parsed));
     } catch {
-      // Try with basic fixes
+      // Try with array-specific fixes
       try {
-        const fixed = basicJsonFix(jsonStr);
+        const fixed = fixArrayJson(jsonStr);
         const parsed = JSON.parse(fixed);
-        
-        
         candidates.push(createValueFromParsed(parsed));
       } catch {
-        // Store as string
-        candidates.push(createStringValue(jsonStr));
+        // Try with state machine parser
+        try {
+          const { value } = parseWithStateMachine(jsonStr);
+          candidates.push(value);
+        } catch {
+          // Store as string
+          candidates.push(createStringValue(jsonStr));
+        }
       }
     }
   }
@@ -182,7 +187,7 @@ function extractJsonPatterns(input: string): Value[] {
   while ((match = incompleteArrayRegex.exec(input)) !== null) {
     const jsonStr = match[0];
     try {
-      const fixed = basicJsonFix(jsonStr);
+      const fixed = fixJson(jsonStr);
       const parsed = JSON.parse(fixed);
       candidates.push(createValueFromParsed(parsed));
     } catch {
@@ -198,6 +203,67 @@ function extractJsonPatterns(input: string): Value[] {
   }
   
   return candidates;
+}
+
+function fixArrayJson(input: string): string {
+  let fixed = input;
+  
+  // Handle unquoted string elements: [hello, world] → ["hello", "world"]
+  fixed = fixed.replace(/\[(.*?)\]/g, (match, contents) => {
+    // Split by commas but preserve quoted strings
+    const elements = [];
+    let current = '';
+    let inQuotes = false;
+    let quoteChar = '';
+    
+    for (let i = 0; i < contents.length; i++) {
+      const char = contents[i];
+      
+      if (!inQuotes && (char === '"' || char === "'")) {
+        inQuotes = true;
+        quoteChar = char;
+        current += char;
+      } else if (inQuotes && char === quoteChar && (i === 0 || contents[i-1] !== '\\')) {
+        inQuotes = false;
+        quoteChar = '';
+        current += char;
+      } else if (!inQuotes && char === ',') {
+        elements.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    
+    if (current.trim()) {
+      elements.push(current.trim());
+    }
+    
+    // Quote unquoted elements
+    const fixedElements = elements.map(element => {
+      element = element.trim();
+      if (!element) return element;
+      
+      // Already quoted?
+      if ((element.startsWith('"') && element.endsWith('"')) ||
+          (element.startsWith("'") && element.endsWith("'"))) {
+        // Normalize to double quotes
+        return `"${element.slice(1, -1).replace(/"/g, '\\"')}"`;
+      }
+      
+      // Is it a number, boolean, or null?
+      if (/^(true|false|null|\d+(\.\d+)?)$/i.test(element)) {
+        return element.toLowerCase();
+      }
+      
+      // Quote as string
+      return `"${element.replace(/"/g, '\\"')}"`;
+    });
+    
+    return `[${fixedElements.join(', ')}]`;
+  });
+  
+  return fixed;
 }
 
 function basicJsonFix(input: string): string {
