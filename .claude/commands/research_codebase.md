@@ -93,7 +93,7 @@ Then wait for the user's research query.
 
 5. **Gather metadata for the research document:**
    - Get current date/time, git commit hash, branch name, and repository info using bash commands
-   - Filename: should be under the `specifications` directory (note: with an 's'). Name the file `research_YYYY-MM-DD_HH-MM-SS_topic.md`
+   - Filename: should be under the `specifications/[feature]/research` directory (note: with an 's'). Name the file `research_YYYY-MM-DD_HH-MM-SS_topic.md`
 
 6. **Generate research document:**
    - Use the metadata gathered in step 4
@@ -171,7 +171,7 @@ Then wait for the user's research query.
      - `test/README.md` - Testing patterns and conventions
 
      ## Related Research
-     [Links to other research documents in `specifications/`]
+     [Links to other research documents in `specifications/[feature]/research`]
 
      ## Open Questions
      [Any areas that need further investigation]

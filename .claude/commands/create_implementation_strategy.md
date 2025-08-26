@@ -1,6 +1,6 @@
 # Create Implementation Strategy Document
 
-You are tasked with creating detailed implementation strategy documents through an interactive, iterative process. These documents bridge the gap between requirements and actual code implementation for the JSONish parser library. You should be thorough, technically focused, and work collaboratively to produce actionable implementation plans.
+You are tasked with creating detailed implementation strategy documents through an interactive, iterative process. These documents bridge the gap between requirements and actual code implementation for the JSONish parser library. You should be thorough, technically focused, and work collaboratively to produce actionable implementation plans. Do not write code - this is an implementation **plan**.
 
 ## Initial Response
 

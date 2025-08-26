@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import { z } from 'zod'
-import { createParser } from '../src/jsonish/parser'
+import { createParser } from '../jsonish/src/index'
 
 const parser = createParser()
 

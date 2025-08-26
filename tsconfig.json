@@ -1,11 +1,11 @@
 {
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": "jsonish/src",
     "baseUrl": "./",
     "paths": {
       "@/*": [
-        "src/*"
+        "jsonish/src/*"
       ]
     },
     "lib": [
@@ -30,6 +30,6 @@
     ]
   },
   "include": [
-    "src/**/*.ts"
+    "jsonish/src/**/*.ts"
   ]
 }
