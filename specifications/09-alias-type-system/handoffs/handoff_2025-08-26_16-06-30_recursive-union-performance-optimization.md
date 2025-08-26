@@ -139,7 +139,7 @@ type: implementation_strategy
 **Ready for immediate implementation** - all research completed, strategy defined, and implementation roadmap provided with specific file locations.
 
 ### Related Research Documents
-- **Primary Research**: `specifications/08-map-record-parsing/research_2025-08-26_15-58-17_recursive-union-performance.md`
-- **All Research in Directory**: `specifications/08-map-record-parsing/research/` (contains additional analysis documents if any exist)
+- **Primary Research**: `specifications/09-alias-type-system/research/research_2025-08-26_15-58-17_recursive-union-performance.md`
+- **All Research in Directory**: `specifications/09-alias-type-system/research/` (contains additional analysis documents if any exist)
 
 **Note**: The primary research document contains the complete implementation strategy with full code examples, performance analysis, and architectural recommendations. It should be the primary reference for implementation.
