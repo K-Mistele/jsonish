@@ -633,3 +633,4 @@ function findNextNonWhitespace(input: string, start: number): number {
   }
   return -1;
 }
+

@@ -28,11 +28,67 @@ export function fixJson(input: string): string {
   // Fix trailing commas in objects: {"a":1,} → {"a":1}  
   fixed = fixed.replace(/,\s*}/g, '}');
   
+  // Fix mixed escaped/unescaped quotes in string values
+  fixed = fixMixedQuotes(fixed);
+  
   // Auto-close missing brackets and quotes
   fixed = autoCloseBrackets(fixed);
   fixed = autoCloseQuotes(fixed);
   
   return fixed;
+}
+
+function fixMixedQuotes(input: string): string {
+  let result = '';
+  let i = 0;
+  let inString = false;
+  let stringStart = -1;
+  let currentQuote = '';
+  
+  while (i < input.length) {
+    const char = input[i];
+    
+    if (!inString) {
+      if (char === '"' || char === "'") {
+        // Start of a string
+        inString = true;
+        stringStart = i;
+        currentQuote = char;
+        result += char;
+      } else {
+        result += char;
+      }
+    } else {
+      // We're inside a string
+      if (char === '\\' && i + 1 < input.length) {
+        // Properly escaped character, keep as is
+        result += char + input[i + 1];
+        i += 2;
+        continue;
+      } else if (char === currentQuote) {
+        // Look ahead to see if this is likely the end of the string
+        const nextChar = i + 1 < input.length ? input[i + 1] : '';
+        const isStringEnd = nextChar === '' || nextChar === ',' || nextChar === '}' || nextChar === ']' || /\s/.test(nextChar);
+        
+        if (isStringEnd) {
+          // This is the closing quote
+          result += char;
+          inString = false;
+          stringStart = -1;
+          currentQuote = '';
+        } else {
+          // This is an unescaped quote within the string, escape it
+          result += '\\' + char;
+        }
+      } else {
+        result += char;
+      }
+    }
+    
+    i++;
+  }
+  
+  return result;
 }
 
 export function parseWithAdvancedFixing(input: string): { value: Value; fixes: string[] } {

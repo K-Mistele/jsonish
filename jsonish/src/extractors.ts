@@ -130,8 +130,9 @@ function extractJsonPatterns(input: string): Value[] {
   
   // Extract incomplete object-like patterns: {"key": "value (no closing brace)
   const incompleteObjectRegex = /\{[^{}]*$/g;
-  while ((match = incompleteObjectRegex.exec(input)) !== null) {
-    const jsonStr = match[0];
+  let incompleteMatch;
+  while ((incompleteMatch = incompleteObjectRegex.exec(input)) !== null) {
+    const jsonStr = incompleteMatch[0];
     try {
       const fixed = basicJsonFix(jsonStr);
       const parsed = JSON.parse(fixed);
@@ -231,3 +232,4 @@ function basicJsonFix(input: string): string {
   
   return fixed;
 }
+
