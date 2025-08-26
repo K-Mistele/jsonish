@@ -65,7 +65,7 @@ type: implementation_strategy
 - **Hybrid BAML-TypeScript Implementation** (lines 130-316): Complete code examples for two-phase resolution
 - **Performance Comparison** (lines 320-382): Expected 99% improvement (10,102ms → <100ms) 
 - **Integration Benefits** (lines 409-434): Drop-in replacement maintaining API compatibility
-- **Implementation Roadmap** (lines 513-534): 4-7 hour implementation timeline
+- **Implementation Roadmap** (lines 513-534): Detailed implementation strategy and phases
 
 ### Supporting Analysis
 - **BAML Architecture Analysis**: Detailed patterns from `baml/engine/baml-lib/jsonish/src/deserializer/coercer/`
@@ -75,7 +75,7 @@ type: implementation_strategy
 
 ## Action Items & Next Steps
 
-### Phase 1: Core Implementation (2-4 hours)
+### Phase 1: Core Implementation
 1. **Implement `coerceUnionHybrid()`** with two-phase resolution pattern
    - Add `tryDirectCast()` for primitive type fast-path matching (resolves 80%+ cases with zero recursion)
    - Create `coerceWithVisitorOptimization()` using BAML visitor pattern for complex cases
@@ -86,7 +86,7 @@ type: implementation_strategy
    - `lazySchemaCache: WeakMap<z.ZodLazy<any>, z.ZodType>` for schema resolution
    - Implement `createEfficientCacheKey()` and `getValueHash()` functions
 
-### Phase 2: Optimization (1-2 hours)
+### Phase 2: Optimization
 3. **Create `calculateUnionScoreOptimized()`** with memoization
    - Replace expensive operations in current scoring system
    - Add `scoreCache: Map<string, number>` for score memoization
@@ -94,7 +94,7 @@ type: implementation_strategy
 4. **Update Lazy Schema Resolution**
    - Replace `jsonish/src/parser.ts:568-571` with cached `resolveLazySchemaOptimized()`
 
-### Phase 3: Validation (1 hour)
+### Phase 3: Validation
 5. **Performance Testing**
    - Run `bun test test/aliases.test.ts` to verify improvements
    - Target: "should parse JSON with nested object" under 100ms (vs current 10,102ms)
@@ -136,4 +136,10 @@ type: implementation_strategy
 3. **Memory**: Efficient caching without memory leaks
 4. **Maintainability**: Clear, TypeScript-idiomatic implementation following existing patterns
 
-**Ready for immediate implementation** - all research completed, strategy defined, and implementation roadmap provided with specific file locations and expected timelines.
+**Ready for immediate implementation** - all research completed, strategy defined, and implementation roadmap provided with specific file locations.
+
+### Related Research Documents
+- **Primary Research**: `specifications/08-map-record-parsing/research_2025-08-26_15-58-17_recursive-union-performance.md`
+- **All Research in Directory**: `specifications/08-map-record-parsing/research/` (contains additional analysis documents if any exist)
+
+**Note**: The primary research document contains the complete implementation strategy with full code examples, performance analysis, and architectural recommendations. It should be the primary reference for implementation.
