@@ -18,10 +18,6 @@ export function extractJsonFromText(input: string): Value[] {
 export function extractMultipleObjects(input: string): Value[] {
   const objects: Value[] = [];
   
-  // DEBUG: Log when this function is called with function_signature
-  if (input.includes('function_signature')) {
-    console.log('=== extractMultipleObjects called ===');
-  }
   
   // Find multiple object patterns
   const objectRegex = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g;
@@ -29,22 +25,8 @@ export function extractMultipleObjects(input: string): Value[] {
   while ((match = objectRegex.exec(input)) !== null) {
     const jsonStr = match[0];
     
-    // DEBUG: Log extracted object
-    if (input.includes('function_signature')) {
-      console.log('Extracted object jsonStr length:', jsonStr.length);
-      console.log('Contains function_signature:', jsonStr.includes('function_signature'));
-    }
-    
     try {
       const parsed = JSON.parse(jsonStr);
-      
-      // DEBUG: Log successful direct parse
-      if (input.includes('function_signature')) {
-        console.log('Direct JSON.parse succeeded');
-        if (parsed.function_signature) {
-          console.log('Direct parse function_signature:', JSON.stringify(parsed.function_signature));
-        }
-      }
       
       objects.push(createValueFromParsed(parsed));
     } catch {
@@ -53,32 +35,12 @@ export function extractMultipleObjects(input: string): Value[] {
         const fixed = basicJsonFix(jsonStr);
         const parsed = JSON.parse(fixed);
         
-        // DEBUG: Log fixed parse
-        if (input.includes('function_signature')) {
-          console.log('basicJsonFix + JSON.parse succeeded');
-          if (parsed.function_signature) {
-            console.log('Fixed parse function_signature:', JSON.stringify(parsed.function_signature));
-          }
-        }
-        
         objects.push(createValueFromParsed(parsed));
       } catch {
         // Try with state machine parser
         try {
           const { value } = parseWithStateMachine(jsonStr);
           
-          // DEBUG: Log state machine parse
-          if (input.includes('function_signature')) {
-            console.log('State machine parse succeeded');
-            console.log('Value type:', value.type);
-            if (value.type === 'object' && value.entries) {
-              const funcSigEntry = value.entries.find(([k, v]) => k === 'function_signature');
-              if (funcSigEntry) {
-                console.log('State machine function_signature:', JSON.stringify(funcSigEntry[1].value));
-                console.log('State machine function_signature length:', funcSigEntry[1].value.length);
-              }
-            }
-          }
           
           objects.push(value);
         } catch {

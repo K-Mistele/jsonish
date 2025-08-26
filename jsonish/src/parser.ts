@@ -165,9 +165,14 @@ function parsePartialObject<T extends z.ZodObject<any>>(input: string, schema: T
       } catch {
         // If direct coercion fails, try partial parsing for complex types
         if (fieldSchema instanceof z.ZodArray && partialData[key] && Array.isArray(partialData[key])) {
-          // Handle partial arrays - each element might be incomplete
-          const partialArray = partialData[key];
-          const validElements = [];
+          // Check if the original input has incomplete array elements for this field
+          // If so, return empty array instead of attempting partial parsing
+          if (hasIncompleteArrayElementsForField(input, key)) {
+            result[key] = [];
+          } else {
+            // Handle partial arrays - each element might be incomplete
+            const partialArray = partialData[key];
+            const validElements = [];
           
           for (const element of partialArray) {
             try {
@@ -195,6 +200,7 @@ function parsePartialObject<T extends z.ZodObject<any>>(input: string, schema: T
             }
           }
           result[key] = validElements;
+          }
         } else {
           // If coercion fails, use default
           result[key] = getDefaultValue(fieldSchema as z.ZodType);
@@ -230,7 +236,134 @@ function parsePartialObjectFromData<T extends z.ZodObject<any>>(data: any, schem
   return result as z.infer<T>;
 }
 
+function hasIncompleteArrayElementsForField(input: string, fieldName: string): boolean {
+  // Look for a specific field with incomplete array elements
+  const trimmed = input.trim();
+  
+  // Find the field in the input
+  const fieldPattern = new RegExp(`"${fieldName}"\\s*:\\s*\\[`, 'g');
+  const match = fieldPattern.exec(trimmed);
+  if (!match) return false;
+  
+  // Extract the array content starting from the opening bracket
+  const arrayStart = match.index + match[0].length - 1; // Position of '['
+  const arrayContent = trimmed.slice(arrayStart + 1);
+  
+  // Check for unclosed object patterns within the array
+  let braceDepth = 0;
+  let inString = false;
+  let escapeNext = false;
+  let lastNonWhitespaceChar = '';
+  let hasTrailingComma = false;
+  
+  for (let i = 0; i < arrayContent.length; i++) {
+    const char = arrayContent[i];
+    
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    
+    if (char === '\\') {
+      escapeNext = true;
+      continue;
+    }
+    
+    if (char === '"' && !escapeNext) {
+      inString = !inString;
+      continue;
+    }
+    
+    if (!inString) {
+      if (char === '{') {
+        braceDepth++;
+      } else if (char === '}') {
+        braceDepth--;
+      } else if (char === ']' && braceDepth === 0) {
+        // Found end of array with no incomplete objects
+        return false;
+      }
+      
+      // Track non-whitespace characters to detect trailing commas
+      if (char.trim() !== '') {
+        lastNonWhitespaceChar = char;
+        if (char === ',') {
+          hasTrailingComma = true;
+        } else if (char !== ' ' && char !== '\n' && char !== '\t') {
+          hasTrailingComma = false;
+        }
+      }
+    }
+  }
+  
+  // If we end with unclosed braces, check if it's recoverable
+  if (braceDepth > 0) {
+    // If there's a trailing comma, the object was likely going to have more fields
+    // This suggests it's parseable with defaults, not "too incomplete"
+    if (hasTrailingComma) {
+      return false; // Allow parsing with defaults
+    }
+    // No trailing comma suggests truncated/incomplete - return empty array
+    return true;
+  }
+  
+  return false;
+}
+
+function hasIncompleteArrayElements(input: string): boolean {
+  // Look for array patterns with incomplete objects
+  const trimmed = input.trim();
+  
+  // Find array opening
+  const arrayStart = trimmed.indexOf('[');
+  if (arrayStart === -1) return false;
+  
+  const arrayContent = trimmed.slice(arrayStart + 1);
+  
+  // Check for unclosed object patterns within the array
+  // Pattern: { ... with no matching }
+  let braceDepth = 0;
+  let inString = false;
+  let escapeNext = false;
+  
+  for (let i = 0; i < arrayContent.length; i++) {
+    const char = arrayContent[i];
+    
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    
+    if (char === '\\') {
+      escapeNext = true;
+      continue;
+    }
+    
+    if (char === '"' && !escapeNext) {
+      inString = !inString;
+      continue;
+    }
+    
+    if (!inString) {
+      if (char === '{') {
+        braceDepth++;
+      } else if (char === '}') {
+        braceDepth--;
+      }
+    }
+  }
+  
+  // If we end with unclosed braces, the array elements are incomplete
+  return braceDepth > 0;
+}
+
 function parsePartialArray<T extends z.ZodArray<any>>(input: string, schema: T, ctx: ParsingContext): z.infer<T> {
+  // Check if the array contains incomplete/truncated objects
+  // If so, return empty array rather than attempting partial parsing
+  if (hasIncompleteArrayElements(input)) {
+    return [] as z.infer<T>;
+  }
+  
   // For partial arrays, return empty array if we can't parse anything
   try {
     // Try to extract objects from the incomplete array
