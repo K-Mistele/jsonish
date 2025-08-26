@@ -4,6 +4,10 @@ import { Value } from './value.js';
 export function fixJson(input: string): string {
   let fixed = input.trim();
   
+  // Fix double-escaped quotes: ""text"" → "text"
+  // This handles cases like {""a"": ""b""} → {"a": "b"}
+  fixed = fixDoubleEscapedQuotes(fixed);
+  
   // Check if the input looks like mostly valid JSON that just needs comma-number fixing
   const needsMinimalFix = isWellFormedJsonExceptCommaNumbers(fixed);
   
@@ -384,6 +388,46 @@ function autoCloseQuotes(input: string): string {
   
   if (inQuotes) {
     result += '"';
+  }
+  
+  return result;
+}
+
+function fixDoubleEscapedQuotes(input: string): string {
+  // Fix double-escaped quotes: ""text"" → "\"text\""
+  // This handles patterns where the quotes themselves are the intended content
+  // Pattern: ""content"" should become "\"content\"" (literal quotes in the content)
+  
+  let result = '';
+  let i = 0;
+  
+  while (i < input.length) {
+    if (i <= input.length - 4 && input.substring(i, i + 2) === '""') {
+      // Found double quotes, look for the closing double quotes
+      let j = i + 2;
+      let content = '';
+      
+      // Find the closing ""
+      while (j <= input.length - 2) {
+        if (input.substring(j, j + 2) === '""') {
+          // Found closing double quotes, convert to single quotes with escaped literal quotes
+          result += '"\\"' + content + '\\""';
+          i = j + 2;
+          break;
+        }
+        content += input[j];
+        j++;
+      }
+      
+      // If we didn't find closing double quotes, just add the original content
+      if (j > input.length - 2) {
+        result += input[i];
+        i++;
+      }
+    } else {
+      result += input[i];
+      i++;
+    }
   }
   
   return result;

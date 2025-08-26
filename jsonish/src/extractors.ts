@@ -105,6 +105,76 @@ function extractMarkdownCodeBlocks(input: string): Value[] {
   return blocks;
 }
 
+function extractCompleteArraysFromText(input: string): Value[] {
+  const candidates: Value[] = [];
+  const stack: number[] = [];
+  let start = -1;
+  let inQuote = false;
+  let quoteChar = '';
+  let escapeNext = false;
+  
+  for (let i = 0; i < input.length; i++) {
+    const char = input[i];
+    
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    
+    if (char === '\\') {
+      escapeNext = true;
+      continue;
+    }
+    
+    if (!inQuote && (char === '"' || char === "'")) {
+      inQuote = true;
+      quoteChar = char;
+    } else if (inQuote && char === quoteChar) {
+      inQuote = false;
+      quoteChar = '';
+    } else if (!inQuote) {
+      // Only count brackets when not inside quotes
+      if (char === '[') {
+        if (stack.length === 0) {
+          start = i;
+        }
+        stack.push(i);
+      } else if (char === ']') {
+        if (stack.length > 0) {
+          stack.pop();
+          if (stack.length === 0 && start !== -1) {
+            // Found a complete array
+            const jsonStr = input.slice(start, i + 1);
+            try {
+              const parsed = JSON.parse(jsonStr);
+              candidates.push(createValueFromParsed(parsed));
+            } catch {
+              // Try with array-specific fixes
+              try {
+                const fixed = fixArrayJson(jsonStr);
+                const parsed = JSON.parse(fixed);
+                candidates.push(createValueFromParsed(parsed));
+              } catch {
+                // Try with state machine parser
+                try {
+                  const { value } = parseWithStateMachine(jsonStr);
+                  candidates.push(value);
+                } catch {
+                  // Store as string for further processing
+                  candidates.push(createStringValue(jsonStr));
+                }
+              }
+            }
+            start = -1;
+          }
+        }
+      }
+    }
+  }
+  
+  return candidates;
+}
+
 function extractCompleteObjectsFromText(input: string): Value[] {
   const candidates: Value[] = [];
   const stack: number[] = [];
@@ -288,6 +358,10 @@ function findMeaningfulJsonEnd(jsonStr: string): string | null {
 
 function extractJsonPatterns(input: string): Value[] {
   const candidates: Value[] = [];
+  
+  // Extract complete array-like patterns: [item1, item2] with proper nested bracket handling
+  const completeArrays = extractCompleteArraysFromText(input);
+  candidates.push(...completeArrays);
   
   // Extract complete object-like patterns: {"key": "value"} with proper nested brace handling
   const completeObjects = extractCompleteObjectsFromText(input);
