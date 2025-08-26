@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Value, createStringValue, createValueFromParsed } from './value.js';
-import { coerceToString, coerceToNumber, coerceToBoolean, extractFromText, isSchemaType } from './coercer.js';
+import { coerceToString, coerceToNumber, coerceToBoolean, coerceLiteral, isSchemaType, normalizeLiteralString, extractFromText, detectLiteralAmbiguity, isIncompleteQuotedString } from './coercer.js';
 import { fixJson, parseWithAdvancedFixing } from './fixing-parser.js';
 import { extractJsonFromText, extractMultipleObjects } from './extractors.js';
 import type { ParseOptions } from './index.js';
@@ -46,7 +46,7 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
   }
   
   // Strategy 2: Extract JSON from mixed content (for complex types)
-  if (schema instanceof z.ZodObject || schema instanceof z.ZodArray) {
+  if (schema instanceof z.ZodObject || schema instanceof z.ZodArray || schema instanceof z.ZodRecord) {
     // For array schemas, try to collect multiple objects first
     if (schema instanceof z.ZodArray) {
       const multipleObjects = extractMultipleObjects(input);
@@ -95,7 +95,7 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
   }
   
   // Strategy 4: Advanced state machine parsing for complex malformed JSON
-  if (schema instanceof z.ZodObject || schema instanceof z.ZodArray) {
+  if (schema instanceof z.ZodObject || schema instanceof z.ZodArray || schema instanceof z.ZodRecord) {
     try {
       const { value } = parseWithAdvancedFixing(input);
       return coerceValue(value, schema, ctx);
@@ -116,7 +116,7 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
   }
   
   // Strategy 6: Partial parsing for incomplete JSON (if allowPartial is enabled)
-  if (options?.allowPartial && (schema instanceof z.ZodObject || schema instanceof z.ZodArray)) {
+  if (options?.allowPartial && (schema instanceof z.ZodObject || schema instanceof z.ZodArray || schema instanceof z.ZodRecord)) {
     try {
       return parsePartialValue(input, schema, ctx);
     } catch {
@@ -125,7 +125,9 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
   }
   
   // Strategy 7: String fallback with type coercion
+  console.log('DEBUG Strategy 7 - input:', JSON.stringify(input));
   const stringValue = createStringValue(input);
+  console.log('DEBUG Strategy 7 - stringValue.value:', JSON.stringify(stringValue.value));
   return coerceValue(stringValue, schema, ctx);
 }
 
@@ -141,7 +143,11 @@ function parsePartialValue<T extends z.ZodType>(input: string, schema: T, ctx: P
     return parsePartialArray(input, schema, ctx) as z.infer<T>;
   }
   
-  throw new Error('Partial parsing only supported for objects and arrays');
+  if (schema instanceof z.ZodRecord) {
+    return parsePartialRecord(input, schema, ctx) as z.infer<T>;
+  }
+  
+  throw new Error('Partial parsing only supported for objects, arrays, and records');
 }
 
 function parsePartialObject<T extends z.ZodObject<any>>(input: string, schema: T, ctx: ParsingContext): z.infer<T> {
@@ -399,6 +405,38 @@ function parsePartialArray<T extends z.ZodArray<any>>(input: string, schema: T, 
   }
 }
 
+function parsePartialRecord<T extends z.ZodRecord<any, any>>(input: string, schema: T, ctx: ParsingContext): z.infer<T> {
+  // Try to extract whatever JSON we can from the incomplete input as a record
+  let partialData: any = {};
+  
+  // First, try to extract using state machine parsing which is more forgiving
+  try {
+    const { value } = parseWithAdvancedFixing(input);
+    if (value.type === 'object') {
+      // Convert Value to JavaScript object
+      for (const [key, val] of value.entries) {
+        partialData[key] = getValueAsJS(val);
+      }
+    }
+  } catch {
+    // If that fails, try more aggressive partial parsing
+    try {
+      partialData = parseIncompleteJson(input);
+    } catch {
+      // Last resort: create empty object
+      partialData = {};
+    }
+  }
+  
+  // Use the coerceRecord function to handle the schema extraction logic
+  if (typeof partialData === 'object' && partialData !== null && !Array.isArray(partialData)) {
+    const objectValue = createValueFromParsed(partialData);
+    return coerceRecord(objectValue, schema, ctx);
+  }
+  
+  return {} as z.infer<T>;
+}
+
 function getDefaultValue(schema: z.ZodType): any {
   // Handle nullable and optional wrappers first
   if (schema instanceof z.ZodNullable) return null;
@@ -504,14 +542,14 @@ function getValueAsJS(value: Value): any {
 }
 
 // Parsing context for circular reference detection
-interface ParsingContext {
+export interface ParsingContext {
   visitedClassValuePairs: Set<string>;
   visitedLazySchemas?: Set<string>;
   depth: number;
   maxDepth: number;
 }
 
-function createParsingContext(): ParsingContext {
+export function createParsingContext(): ParsingContext {
   return {
     visitedClassValuePairs: new Set(),
     depth: 0,
@@ -561,6 +599,14 @@ function coerceValue<T extends z.ZodType>(value: Value, schema: T, ctx: ParsingC
   
   if (schema instanceof z.ZodEnum) {
     return coerceEnum(value, schema) as z.infer<T>;
+  }
+  
+  if (schema instanceof z.ZodLiteral) {
+    return coerceLiteral(value, schema, ctx) as z.infer<T>;
+  }
+  
+  if (schema instanceof z.ZodRecord) {
+    return coerceRecord(value, schema, ctx) as z.infer<T>;
   }
   
   // Handle wrapped schemas (Optional, Nullable, etc.)
@@ -879,6 +925,25 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
     if (extracted.length > 0) {
       // Use the first extracted value for union resolution
       processedValue = extracted[0];
+    }
+  }
+  
+  // Check for ambiguous literal unions and streaming validation before trying options
+  if (processedValue.type === 'string') {
+    const literalOptions = options.filter((option: z.ZodType) => option instanceof z.ZodLiteral);
+    if (literalOptions.length > 0) {
+      // Check for streaming validation failure (incomplete quoted strings)
+      if (isIncompleteQuotedString(processedValue.value)) {
+        throw new Error('Incomplete quoted string - streaming validation failure');
+      }
+      
+      // Check for ambiguity in non-string literals
+      if (literalOptions.length > 1) {
+        const literalValues = literalOptions.map((option: z.ZodLiteral<any>) => option._def.values[0]);
+        if (detectLiteralAmbiguity(processedValue.value, literalValues)) {
+          throw new Error('Ambiguous literal union - multiple literal values found in text');
+        }
+      }
     }
   }
   
@@ -1202,6 +1267,48 @@ function calculateUnionScore(value: Value, schema: z.ZodType, result: any): numb
     } else {
       score += 10; // Can be coerced to boolean
     }
+  } else if (schema instanceof z.ZodLiteral) {
+    const expectedValue = schema._def.values[0];
+    
+    if (value.type === 'string' && typeof expectedValue === 'string') {
+      // Exact match gets highest score  
+      if (value.value === expectedValue) {
+        score += 100;
+      }
+      // Case-insensitive match gets high score
+      else if (value.value.toLowerCase() === expectedValue.toLowerCase()) {
+        score += 90;
+      }
+      // Normalized match gets medium score
+      else if (normalizeLiteralString(value.value) === normalizeLiteralString(expectedValue)) {
+        score += 70;
+      }
+      // String type compatibility gets base score
+      else {
+        score += 20;
+      }
+    }
+    else if (value.type === 'number' && typeof expectedValue === 'number' && value.value === expectedValue) {
+      score += 100;
+    }
+    else if (value.type === 'boolean' && typeof expectedValue === 'boolean' && value.value === expectedValue) {
+      score += 100;
+    }
+    // Object single-value extraction scoring
+    else if (value.type === 'object' && value.entries.length === 1) {
+      const [key, innerValue] = value.entries[0];
+      if (
+        (innerValue.type === 'string' && typeof expectedValue === 'string') ||
+        (innerValue.type === 'number' && typeof expectedValue === 'number') ||
+        (innerValue.type === 'boolean' && typeof expectedValue === 'boolean')
+      ) {
+        score += 60; // Medium-high score for object extraction
+      }
+    }
+    // Cross-type coercion gets low score
+    else if (value.type === 'string' && (typeof expectedValue === 'number' || typeof expectedValue === 'boolean')) {
+      score += 10;
+    }
   } else if (schema instanceof z.ZodNull || schema instanceof z.ZodUndefined) {
     if (value.type === 'null') {
       score += 100; // Exact match
@@ -1258,6 +1365,12 @@ function calculateUnionScore(value: Value, schema: z.ZodType, result: any): numb
     } else {
       score += 20; // Can potentially be converted to object
     }
+  } else if (schema instanceof z.ZodRecord) {
+    if (value.type === 'object') {
+      score += 95; // High score for record match (slightly lower than object to prefer objects when appropriate)
+    } else {
+      score += 15; // Can potentially be converted to record
+    }
   }
   
   // Bonus for no coercion needed (result type matches schema expectation)
@@ -1270,4 +1383,166 @@ function calculateUnionScore(value: Value, schema: z.ZodType, result: any): numb
   }
   
   return score;
+}
+function coerceRecord<T extends z.ZodRecord<any, any>>(value: Value, schema: T, ctx: ParsingContext): z.infer<T> {
+  // Handle Zod v4 API inconsistency: z.record(valueSchema) doesn't set valueType properly
+  // For single-parameter z.record(valueSchema), the valueSchema ends up in keyType, but valueType is undefined
+  // For two-parameter z.record(keySchema, valueSchema), both are set correctly
+  
+  let keySchema: z.ZodType;
+  let valueSchema: z.ZodType;
+  
+  if (schema.valueType) {
+    // Two-parameter form: z.record(keySchema, valueSchema)
+    keySchema = schema.keyType;
+    valueSchema = schema.valueType;
+  } else {
+    // Single-parameter form: z.record(valueSchema) - the valueSchema is actually in keyType
+    keySchema = z.string(); // Keys are always strings in single-parameter form
+    valueSchema = schema.keyType; // The actual value schema is stored in keyType due to Zod v4 bug
+  }
+  
+  const newCtx = { ...ctx, depth: ctx.depth + 1 };
+  
+  if (newCtx.depth > newCtx.maxDepth) {
+    throw new Error('Maximum recursion depth exceeded');
+  }
+  
+  if (value.type === 'object') {
+    const result: Record<string, any> = {};
+    
+    for (const [key, val] of value.entries) {
+      // Coerce the key (usually to string)
+      const coercedKey = coerceRecordKey(key, keySchema);
+      // Coerce the value using the value schema
+      const coercedValue = coerceValue(val, valueSchema, newCtx);
+      result[coercedKey] = coercedValue;
+    }
+    
+    // Manual validation since Zod v4 record parsing is broken
+    // For keys, we can validate directly since they should be strings/enums/literals
+    // For values, we need to avoid direct .parse() if the valueSchema is a Record (due to Zod v4 bug)
+    for (const [key, val] of Object.entries(result)) {
+      keySchema.parse(key); // Validate key - should be safe
+      
+      // For value validation, check if it's already been coerced properly
+      // Since we used coerceValue() above, the values should already be correct
+      // Only validate primitive value types to avoid Zod v4 record parse issues
+      if (valueSchema instanceof z.ZodString || 
+          valueSchema instanceof z.ZodNumber || 
+          valueSchema instanceof z.ZodBoolean || 
+          valueSchema instanceof z.ZodEnum ||
+          valueSchema instanceof z.ZodLiteral) {
+        valueSchema.parse(val); // Safe to validate primitive types
+      }
+      // For complex types (ZodRecord, ZodObject, ZodArray), trust that coerceValue did the right thing
+    }
+    return result as z.infer<T>;
+  }
+  
+  // Handle string values that might contain JSON objects  
+  if (value.type === 'string') {
+    const trimmed = value.value.trim();
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      // Try to parse as JSON and create object Value
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+          const objectValue = createValueFromParsed(parsed);
+          return coerceRecord(objectValue, schema, newCtx);
+        }
+      } catch {
+        // Try fixing parser if JSON.parse fails
+        try {
+          const fixed = fixJson(trimmed);
+          const parsed = JSON.parse(fixed);
+          if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+            const objectValue = createValueFromParsed(parsed);
+            return coerceRecord(objectValue, schema, newCtx);
+          }
+        } catch {
+          // Continue to other strategies
+        }
+      }
+    }
+  }
+  
+  // Fallback: try to parse as generic value and handle Zod validation manually
+  const genericValue = coerceValueGeneric(value);
+  if (typeof genericValue === 'object' && genericValue !== null && !Array.isArray(genericValue)) {
+    // Manual validation since Zod v4 record parsing is broken
+    for (const [key, val] of Object.entries(genericValue)) {
+      keySchema.parse(key); // Validate key - should be safe
+      
+      // For value validation, only validate primitive types to avoid Zod v4 record parse issues
+      if (valueSchema instanceof z.ZodString || 
+          valueSchema instanceof z.ZodNumber || 
+          valueSchema instanceof z.ZodBoolean || 
+          valueSchema instanceof z.ZodEnum ||
+          valueSchema instanceof z.ZodLiteral) {
+        valueSchema.parse(val); // Safe to validate primitive types
+      }
+      // For complex types (ZodRecord, ZodObject, ZodArray), trust the generic coercion
+    }
+    return genericValue as z.infer<T>;
+  }
+  
+  // Graceful handling for non-object inputs like empty strings or invalid JSON
+  if (value.type === 'string') {
+    // For empty strings or invalid JSON, return empty record
+    const trimmed = value.value.trim();
+    if (trimmed === '' || trimmed === 'null' || trimmed === 'undefined') {
+      return {} as z.infer<T>;
+    }
+    
+    // For other string inputs that don't look like JSON, return empty record gracefully
+    // This handles cases like "not json at all"
+    if (!trimmed.includes('{') && !trimmed.includes('[')) {
+      return {} as z.infer<T>;
+    }
+  }
+  
+  // If all else fails, return empty record
+  return {} as z.infer<T>;
+}
+
+function coerceRecordKey(key: string, keySchema: z.ZodType): string {
+  // For record keys, we typically want strings, but support key schema validation
+  if (keySchema instanceof z.ZodString) {
+    return key; // Already a string, just return it
+  }
+  
+  if (keySchema instanceof z.ZodEnum) {
+    // For enum keys, validate that the key matches one of the enum values
+    const enumValues = keySchema.options as readonly string[];
+    if (enumValues.includes(key)) {
+      return key;
+    }
+    throw new Error(`Record key '${key}' is not a valid enum value`);
+  }
+  
+  if (keySchema instanceof z.ZodLiteral) {
+    // For literal keys, ensure exact match
+    const expectedValue = keySchema._def.values[0]; // Zod v4 stores literals in values array
+    if (key === String(expectedValue)) {
+      return key;
+    }
+    throw new Error(`Record key '${key}' does not match literal value '${expectedValue}'`);
+  }
+  
+  if (keySchema instanceof z.ZodUnion) {
+    // For union keys (like z.union([z.literal("A"), z.literal("B")])), try each option
+    const options = keySchema._def.options;
+    for (const option of options) {
+      try {
+        return coerceRecordKey(key, option);
+      } catch {
+        continue;
+      }
+    }
+    throw new Error(`Record key '${key}' does not match any union option`);
+  }
+  
+  // Default: convert to string
+  return String(key);
 }
