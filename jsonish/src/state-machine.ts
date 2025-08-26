@@ -277,6 +277,8 @@ function parseString(input: string, state: ParseState, quote: string): ParseResu
   }
   
   let escaped = false;
+  let bracketDepth = 0;
+  
   while (state.position < input.length) {
     const char = input[state.position];
     
@@ -307,10 +309,16 @@ function parseString(input: string, state: ParseState, quote: string): ParseResu
       escaped = false;
     } else if (char === '\\') {
       escaped = true;
-    } else if (char === quote) {
+    } else if (char === quote && bracketDepth === 0) {
       state.position++; // skip closing quote
       return { value: createStringValue(value), position: state.position, fixes };
     } else {
+      // Track brackets to handle nested JSON-like content in strings
+      if (char === '[' || char === '{') {
+        bracketDepth++;
+      } else if (char === ']' || char === '}') {
+        bracketDepth--;
+      }
       value += char;
     }
     
@@ -581,11 +589,38 @@ function parseNull(input: string, state: ParseState): ParseResult {
 function skipWhitespace(input: string, state: ParseState): void {
   while (state.position < input.length) {
     const char = input[state.position];
+    
+    // Skip regular whitespace
     if (char === ' ' || char === '\t' || char === '\n' || char === '\r') {
       state.position++;
-    } else {
-      break;
+      continue;
     }
+    
+    // Handle single-line comments //
+    if (char === '/' && state.position + 1 < input.length && input[state.position + 1] === '/') {
+      // Skip to end of line
+      state.position += 2;
+      while (state.position < input.length && input[state.position] !== '\n' && input[state.position] !== '\r') {
+        state.position++;
+      }
+      continue;
+    }
+    
+    // Handle multi-line comments /* */
+    if (char === '/' && state.position + 1 < input.length && input[state.position + 1] === '*') {
+      state.position += 2;
+      while (state.position + 1 < input.length) {
+        if (input[state.position] === '*' && input[state.position + 1] === '/') {
+          state.position += 2;
+          break;
+        }
+        state.position++;
+      }
+      continue;
+    }
+    
+    // No more whitespace/comments to skip
+    break;
   }
 }
 
