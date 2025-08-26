@@ -109,42 +109,64 @@ function extractCompleteObjectsFromText(input: string): Value[] {
   const candidates: Value[] = [];
   const stack: number[] = [];
   let start = -1;
+  let inQuote = false;
+  let quoteChar = '';
+  let escapeNext = false;
   
   for (let i = 0; i < input.length; i++) {
     const char = input[i];
     
-    if (char === '{') {
-      if (stack.length === 0) {
-        start = i;
-      }
-      stack.push(i);
-    } else if (char === '}') {
-      if (stack.length > 0) {
-        stack.pop();
-        if (stack.length === 0 && start !== -1) {
-          // Found a complete object
-          const jsonStr = input.slice(start, i + 1);
-          try {
-            const parsed = JSON.parse(jsonStr);
-            candidates.push(createValueFromParsed(parsed));
-          } catch {
-            // Try with comprehensive fixes
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    
+    if (char === '\\') {
+      escapeNext = true;
+      continue;
+    }
+    
+    if (!inQuote && (char === '"' || char === "'")) {
+      inQuote = true;
+      quoteChar = char;
+    } else if (inQuote && char === quoteChar) {
+      inQuote = false;
+      quoteChar = '';
+    } else if (!inQuote) {
+      // Only count braces when not inside quotes
+      if (char === '{') {
+        if (stack.length === 0) {
+          start = i;
+        }
+        stack.push(i);
+      } else if (char === '}') {
+        if (stack.length > 0) {
+          stack.pop();
+          if (stack.length === 0 && start !== -1) {
+            // Found a complete object
+            const jsonStr = input.slice(start, i + 1);
             try {
-              const fixed = fixJson(jsonStr);
-              const parsed = JSON.parse(fixed);
+              const parsed = JSON.parse(jsonStr);
               candidates.push(createValueFromParsed(parsed));
             } catch {
-              // Try with state machine parser
+              // Try with comprehensive fixes
               try {
-                const { value } = parseWithStateMachine(jsonStr);
-                candidates.push(value);
+                const fixed = fixJson(jsonStr);
+                const parsed = JSON.parse(fixed);
+                candidates.push(createValueFromParsed(parsed));
               } catch {
-                // Store as string for further processing
-                candidates.push(createStringValue(jsonStr));
+                // Try with state machine parser
+                try {
+                  const { value } = parseWithStateMachine(jsonStr);
+                  candidates.push(value);
+                } catch {
+                  // Store as string for further processing
+                  candidates.push(createStringValue(jsonStr));
+                }
               }
             }
+            start = -1;
           }
-          start = -1;
         }
       }
     }
@@ -189,27 +211,41 @@ function findMeaningfulJsonEnd(jsonStr: string): string | null {
   let inString = false;
   let stringChar = '';
   let lastMeaningfulPos = 0;
+  let escapeNext = false;
   
   for (let i = 0; i < jsonStr.length; i++) {
     const char = jsonStr[i];
-    const prevChar = i > 0 ? jsonStr[i-1] : '';
+    
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    
+    if (char === '\\') {
+      escapeNext = true;
+      continue;
+    }
     
     if (!inString && (char === '"' || char === "'")) {
       inString = true;
       stringChar = char;
-    } else if (inString && char === stringChar && prevChar !== '\\') {
+    } else if (inString && char === stringChar) {
       inString = false;
       stringChar = '';
     } else if (!inString) {
       if (char === '{') {
         depth++;
+        lastMeaningfulPos = i;
       } else if (char === '}') {
         depth--;
+        lastMeaningfulPos = i;
         if (depth === 0) {
           // Found complete object, not what we're looking for
           return null;
         }
-      } else if (char === ':' || char === ',' || char === '"' || char === "'" || char === 'null'[i % 4] || /[0-9]/.test(char)) {
+      } else if (char === ':' || char === ',' || char === '"' || char === "'" || 
+                 /[0-9]/.test(char) || char === 't' || char === 'f' || char === 'n' ||
+                 char === '[' || char === ']') {
         // This is a meaningful JSON character
         lastMeaningfulPos = i;
       } else if (char === '\n' && depth > 0) {
@@ -219,15 +255,26 @@ function findMeaningfulJsonEnd(jsonStr: string): string | null {
           nextLineStart++;
         }
         if (nextLineStart < jsonStr.length) {
-          const restOfLine = jsonStr.slice(nextLineStart).split('\n')[0];
-          // If line doesn't start with JSON-like characters and looks like English
-          if (restOfLine && !/^[\s]*["}'\[\],:0-9]/.test(restOfLine) && /[A-Z]/.test(restOfLine[0])) {
+          const restOfLine = jsonStr.slice(nextLineStart).split('\n')[0].trim();
+          // More permissive pattern - only stop on clearly non-JSON text patterns
+          // Allow field names, numbers, booleans, nulls, nested structures
+          if (restOfLine && 
+              !/^[\s]*["}'\[\],:0-9tfn]/.test(restOfLine) && 
+              !/^[\s]*[a-zA-Z_][a-zA-Z0-9_]*[\s]*:/.test(restOfLine) && // field names
+              /^[A-Z][a-z]+\s+[a-z]/.test(restOfLine)) { // English sentence pattern
             // This looks like English text, stop here
             break;
           }
         }
         lastMeaningfulPos = i;
+      } else if (depth > 0) {
+        // Inside an object, keep updating position for any character
+        lastMeaningfulPos = i;
       }
+    }
+    
+    if (inString) {
+      lastMeaningfulPos = i;
     }
   }
   

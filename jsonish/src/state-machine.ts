@@ -1,6 +1,8 @@
 import { Value, createStringValue, createNumberValue, createBooleanValue, createNullValue, createArrayValue, createObjectValue } from './value.js';
 
 type ParseContext = 'InNothing' | 'InObjectKey' | 'InObjectValue' | 'InArray' | 'InString';
+
+
 type CollectionType = 'object' | 'array';
 
 interface ParseState {
