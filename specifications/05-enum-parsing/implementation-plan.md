@@ -1,307 +1,402 @@
 ---
-date: 2025-07-24T11:43:00-05:00
+date: 2025-08-26T16:30:00-05:00
 researcher: Claude
-git_commit: 30f823846ca23755cf7c5e93c159139585255a82
+git_commit: c53551eac1b30583ed4237885164232d6800a5cb
 branch: master
 repository: jsonish
-topic: "Enum Parsing Enhancement Implementation Strategy"
-tags: [implementation, strategy, parser, deserializer, coercer, jsonish, enum, string-matching]
+topic: "Enum Value Parsing and Validation Implementation Strategy"
+tags: [implementation, strategy, parser, deserializer, coercer, jsonish, zod, enum, text-extraction]
 status: complete
-last_updated: 2025-07-24
+last_updated: 2025-08-26
 last_updated_by: Claude
 type: implementation_strategy
 ---
 
-# Enum Parsing Enhancement Implementation Plan
+# Enum Value Parsing and Validation Implementation Plan
 
 ## Overview
 
-This plan enhances the existing enum parsing implementation to achieve full compatibility with the Rust JSONish parser. The current TypeScript implementation is ~60% complete with basic functionality working, but requires sophisticated string matching algorithms, proper ambiguity detection, and robust error handling to match the test suite requirements and Rust implementation behavior.
+This implementation provides comprehensive enum parsing capabilities for the JSONish parser, enabling intelligent enum value extraction, case-insensitive matching, text-based extraction, and robust error handling. The implementation bridges the gap between the sophisticated Rust BAML enum system (1,500+ lines) and TypeScript/Zod integration, providing full enum parsing functionality to pass all 12 failing enum test cases.
 
 ## Current State Analysis
 
+The JSONish TypeScript parser currently has **zero enum parsing functionality**, causing all enum-related tests to fail. The parser infrastructure is solid but missing critical enum-specific components.
+
 ### Key Discoveries:
-- **Existing Implementation**: Basic enum coercer at `src/deserializer/coercer/ir_ref/coerce_enum.ts:24` with fundamental architecture in place
-- **String Matching Gap**: Current algorithm at `src/deserializer/coercer/match_string.ts:34` is overly simplistic compared to Rust's multi-phase substring matching
-- **Test Status**: 12/19 tests passing, 7 failing tests reveal critical missing functionality in ambiguity detection and complex text extraction
-- **Architecture Foundation**: Excellent integration patterns with flag management, scoring system, and deserializer integration already established
-
-### Current Working Functionality:
-- ✅ Exact enum value matching (`coerce_enum.ts:41-47`)
-- ✅ Basic case-insensitive matching via `matchOneFromMany()`
-- ✅ Array extraction and simple quoted value handling
-- ✅ Integration with Zod schemas and flag management system
-- ✅ Basic text extraction with description prefixes
-
-### Critical Missing Features:
-- ❌ **Advanced Substring Matching**: Rust's sophisticated algorithm with overlap filtering and position-based sorting
-- ❌ **Multi-Stage Matching Strategy**: Progressive exact → punctuation-stripped → case-insensitive approach
-- ❌ **Proper Ambiguity Detection**: Should throw errors for ambiguous matches but currently returns first match
-- ❌ **Complex Text Extraction**: Fails on scenarios like `"TWO" is one of the correct answers.`
-- ❌ **Optional Enum Handling**: Incorrect behavior with `z.enum().optional()` schemas
+- **Parser Gap**: `jsonish/src/parser.ts:544` missing `z.ZodEnum` case in `coerceValue()` function - all enum inputs fall through to generic `schema.parse()` causing failures
+- **Coercer Gap**: `jsonish/src/coercer.ts` lacks `coerceToEnum()` function equivalent to existing `coerceToString()`, `coerceToNumber()`, `coerceToBoolean()` patterns
+- **Text Extraction Gap**: `extractFromText()` function at `jsonish/src/coercer.ts:114-154` has no enum support for patterns like `"ONE: description"` or `"**one** is correct"`
+- **Strong Foundation**: Existing Value system, multi-strategy parsing, and union resolution framework ready for enum integration
 
 ## What We're NOT Doing
 
-- Rewriting the core deserializer architecture or flag management system
-- Changing the parser-level integration points or Value type representations
-- Modifying test expectations or requirements - all existing tests must pass
-- Creating new coercer registration patterns - using existing `FieldTypeCoercer` integration
-- Implementing alias system beyond what's tested (no alias tests in current suite)
+- BAML-specific `@alias` annotations (focusing on Zod enum schemas only)
+- Complex Unicode normalization (Rust implementation's Tier 4/5 matching initially)
+- International character support beyond basic case folding
+- Streaming-specific enum optimizations (will leverage existing streaming infrastructure)
 
 ## Implementation Approach
 
-**Strategy**: Enhance the existing enum coercer by replacing its string matching algorithm with a sophisticated multi-phase approach that mirrors the Rust implementation's progressive matching strategy and comprehensive error detection.
+The implementation follows a 3-phase approach building on the existing JSONish architecture: parser → value → coercion → validation. Each phase targets specific test case groups and builds incrementally toward full Rust implementation parity.
 
-The implementation follows the established JSONish pattern: parser → value → deserializer → coercer, with all enum-specific logic contained in the deserializer coercer layer.
-
-## Phase 1: Advanced String Matching Algorithm
+## Phase 1: Core Enum Recognition and Basic Matching
 
 ### Overview
-Replace the current simple string matching with a sophisticated substring matching algorithm that implements the Rust reference behavior including overlap filtering, position-based sorting, and proper ambiguity detection.
+Establish fundamental enum parsing by adding Zod enum recognition to the parser and implementing basic enum coercion with exact and case-insensitive matching. This phase targets 7/12 test cases passing.
 
 ### Changes Required:
 
-#### 1. Enhanced String Matching Engine
-**File**: `src/deserializer/coercer/match_string.ts`
-**Changes**: Complete rewrite of string matching functions to implement Rust algorithm
+#### 1. Add Zod Enum Recognition to Parser
+**File**: `jsonish/src/parser.ts`
+**Location**: Line 544 (after existing type checks in `coerceValue()` function)
 
 ```typescript
-// Replace lines 6-72 with sophisticated multi-phase matching
-export function matchString(expected: string, actual: string, phase: MatchPhase): MatchResult {
-  switch (phase) {
-    case MatchPhase.Exact:
-      return exactMatch(expected, actual)
-    case MatchPhase.PunctuationStripped:
-      return punctuationStrippedMatch(expected, actual)
-    case MatchPhase.CaseInsensitive:
-      return caseInsensitiveMatch(expected, actual)
-  }
-}
-
-// Implement advanced substring matching with overlap filtering
-export function findSubstringMatches(input: string, candidates: string[]): SubstringMatch[] {
-  // Find all occurrences of each candidate within input
-  // Sort by position and length (longer matches preferred)
-  // Filter out overlapping matches to prevent double-counting
-  // Return non-overlapping matches with positions and scores
-}
-
-// Enhanced multi-option selection with proper ambiguity detection
-export function matchOneFromMany(
-  value: string,
-  options: string[]
-): { match: string; flags: DeserializerConditions } | null {
-  // Progressive matching through three phases
-  // Count occurrences across non-overlapping substring matches
-  // Detect and flag ambiguous results (equal occurrence counts)
-  // Return winning candidate with comprehensive flagging
+if (schema instanceof z.ZodEnum) {
+  return coerceToEnum(value, schema, ctx) as z.infer<T>;
 }
 ```
 
-#### 2. Multi-Phase Matching Strategy
-**File**: `src/deserializer/coercer/match_string.ts`
-**Changes**: Add progressive matching phases
+**Integration Notes**: 
+- Add after line 542 `z.ZodObject` check
+- Follow existing pattern of other type checks
+- Pass `ParsingContext` for consistency
+
+#### 2. Create Basic Enum Coercer Function
+**File**: `jsonish/src/coercer.ts`
+**Location**: New export function after existing coercers (~line 57)
 
 ```typescript
-enum MatchPhase {
-  Exact = 'exact',
-  PunctuationStripped = 'punctuation_stripped', 
-  CaseInsensitive = 'case_insensitive'
-}
-
-// Phase 1: Direct case-sensitive matches
-function exactMatch(expected: string, actual: string): MatchResult
-
-// Phase 2: Remove punctuation (preserve hyphens/underscores)
-function punctuationStrippedMatch(expected: string, actual: string): MatchResult
-
-// Phase 3: Case-insensitive with ambiguity detection
-function caseInsensitiveMatch(expected: string, actual: string): MatchResult
-```
-
-### Success Criteria:
-
-**Automated verification**
-- [ ] `bun test ./test/enum.test.ts` passes all 19 test cases
-- [ ] `bun build` completes without errors
-- [ ] No TypeScript errors in enhanced string matching module
-
-**Manual Verification**
-- [ ] Complex text extraction works: `"TWO" is one of the correct answers.` → `"TWO"`
-- [ ] Ambiguous matches properly throw errors instead of returning first match
-- [ ] Multi-stage matching prioritizes exact matches over fuzzy matches
-- [ ] Substring overlap filtering prevents double-counting in complex text
-
-## Phase 2: Enhanced Enum Coercer Logic
-
-### Overview
-Upgrade the enum coercer to utilize the new string matching algorithm and implement proper error handling for ambiguous cases and optional schemas.
-
-### Changes Required:
-
-#### 1. Enum Coercer Enhancement
-**File**: `src/deserializer/coercer/ir_ref/coerce_enum.ts`
-**Changes**: Replace simple matching logic with multi-phase approach
-
-```typescript
-// Replace lines 49-59 with sophisticated matching strategy
-const matchPhases = [MatchPhase.Exact, MatchPhase.PunctuationStripped, MatchPhase.CaseInsensitive]
-
-for (const phase of matchPhases) {
-  const matchResult = matchOneFromMany(val, options, phase)
-  if (matchResult) {
-    // Check for ambiguity flag and handle appropriately
-    if (matchResult.flags.hasFlag(Flag.StrMatchOneFromMany)) {
-      const ambiguityData = matchResult.flags.getFlag(Flag.StrMatchOneFromMany)
-      if (shouldRejectAmbiguous(ambiguityData)) {
-        return ctx.errorTooManyMatches(target, ambiguityData.matches.map(([str]) => str))
+export function coerceToEnum<T extends readonly [string, ...string[]]>(
+  value: Value,
+  schema: z.ZodEnum<T>,
+  ctx?: ParsingContext
+): T[number] {
+  const enumValues = Object.values(schema.enum) as T;
+  
+  // Strategy 1: Exact string match
+  if (value.type === 'string') {
+    if (enumValues.includes(value.value as T[number])) {
+      return value.value as T[number];
+    }
+    
+    // Strategy 2: Case-insensitive match  
+    const lowerInput = value.value.toLowerCase();
+    for (const enumValue of enumValues) {
+      if (enumValue.toLowerCase() === lowerInput) {
+        return enumValue;
       }
     }
-    return createEnum(enumName, matchResult.match, target, matchResult.flags)
+  }
+  
+  // Strategy 3: Array extraction (first valid)
+  if (value.type === 'array' && value.items.length > 0) {
+    for (const item of value.items) {
+      try {
+        return coerceToEnum(item, schema, ctx);
+      } catch {
+        continue; // Try next item
+      }
+    }
+  }
+  
+  throw new Error(`Could not coerce ${JSON.stringify(value)} to enum ${enumValues.join(' | ')}`);
+}
+```
+
+#### 3. Handle Optional Enum Schemas
+**Enhancement**: Add optional enum handling in parser and coercer
+
+```typescript
+// In parser.ts coerceValue()
+if (schema instanceof z.ZodOptional) {
+  const inner = schema._def.innerType;
+  if (inner instanceof z.ZodEnum) {
+    try {
+      return coerceToEnum(value, inner, ctx) as z.infer<T>;
+    } catch {
+      return undefined as z.infer<T>;
+    }
   }
 }
 ```
 
-#### 2. Proper Optional Schema Handling
-**File**: `src/deserializer/coercer/ir_ref/coerce_enum.ts`
-**Changes**: Add optional enum support
-
-```typescript
-// Add before line 61 (return ctx.errorUnexpectedType)
-// Handle optional enums by returning undefined instead of error
-if (target.isOptional()) {
-  return createEnum(enumName, undefined, target)
-}
-```
-
-#### 3. Ambiguity Detection Logic
-**File**: `src/deserializer/coercer/ir_ref/coerce_enum.ts`  
-**Changes**: Add helper function for ambiguity evaluation
-
-```typescript
-function shouldRejectAmbiguous(ambiguityData: { matches: Array<[string, number]> }): boolean {
-  // Check if multiple matches have equal highest scores
-  const sortedMatches = ambiguityData.matches.sort((a, b) => b[1] - a[1])
-  return sortedMatches.length > 1 && sortedMatches[0][1] === sortedMatches[1][1]
-}
-```
-
 ### Success Criteria:
 
-**Automated verification**
-- [ ] All 7 previously failing tests now pass
-- [ ] Tests for ambiguous match detection (lines 112-138) properly throw errors
-- [ ] Optional enum test (line 144-158) returns `undefined` instead of incorrect values
-- [ ] `bun test` shows 19/19 tests passing
+**Automated Verification**
+- [ ] `bun test test/enum.test.ts` - 7/12 tests passing (basic enum cases)
+- [ ] `bun build` completes without TypeScript errors
+- [ ] No regressions: `bun test` passes all non-enum tests
 
-**Manual Verification**
-- [ ] Error cases properly throw with meaningful error messages
-- [ ] Optional enum schemas handle null/undefined cases correctly
-- [ ] Flag management properly tracks matching decisions and ambiguity
-- [ ] No regressions in existing passing functionality
+**Manual Verification** 
+- [ ] Case-insensitive matching: `"two"` → `"TWO"`
+- [ ] Array extraction: `'["TWO"]'` → `"TWO"`
+- [ ] Multi-item arrays: `'["TWO", "THREE"]'` → `"TWO"` (first valid)
+- [ ] Optional enum with null fallback works
 
-## Phase 3: Content Extraction Enhancement
+## Phase 2: Text Extraction and Pattern Recognition
 
 ### Overview
-Improve text processing for complex content extraction scenarios including markdown formatting, punctuation separation, and mixed content parsing.
+Add sophisticated text extraction capabilities to handle enum values embedded in natural language, markdown, and descriptive text. This phase targets 10/12 test cases passing.
 
 ### Changes Required:
 
-#### 1. Advanced Text Preprocessing
-**File**: `src/deserializer/coercer/match_string.ts`
-**Changes**: Add text normalization utilities
+#### 4. Enhance Text Extraction in Coercer  
+**File**: `jsonish/src/coercer.ts`
+**Location**: `extractFromText()` function at line 114-154
+
+Add enum case after boolean extraction:
 
 ```typescript
-// Enhanced text preprocessing for content extraction
-function preprocessTextForMatching(input: string): string {
-  // Remove markdown formatting while preserving content
-  // Handle quoted text extraction
-  // Normalize punctuation separators
-  return normalizedText
-}
-
-// Extract enum candidates from mixed content
-function extractEnumCandidates(text: string): string[] {
-  // Find potential enum values within descriptive text
-  // Handle punctuation-separated sections
-  // Return candidate strings for matching
+// Add to extractFromText function
+export function extractFromText(text: string, schema: z.ZodType): any {
+  // ... existing number and boolean extraction ...
+  
+  // Enum extraction
+  if (schema instanceof z.ZodEnum) {
+    return extractEnumFromText(text, schema);
+  }
+  
+  // Optional enum extraction  
+  if (schema instanceof z.ZodOptional) {
+    const inner = schema._def.innerType;
+    if (inner instanceof z.ZodEnum) {
+      try {
+        return extractEnumFromText(text, inner);
+      } catch {
+        return undefined;
+      }
+    }
+  }
+  
+  // ... existing fallback logic ...
 }
 ```
 
-#### 2. Markdown and Formatting Support
-**File**: `src/deserializer/coercer/match_string.ts`
-**Changes**: Add markdown-aware text processing
+#### 5. Implement Enum Text Extraction Function
+**File**: `jsonish/src/coercer.ts`
+**Location**: New function after existing text extraction helpers
 
 ```typescript
-function stripMarkdownFormatting(text: string): string {
-  // Remove **bold**, *italic*, `code` formatting
-  // Preserve text content for enum extraction
-  // Handle nested formatting scenarios
+function extractEnumFromText<T extends readonly [string, ...string[]]>(
+  text: string, 
+  schema: z.ZodEnum<T>
+): T[number] {
+  const enumValues = Object.values(schema.enum) as T;
+  
+  // Pattern 1: Description prefix ("ONE: description", "ONE - description")
+  for (const enumValue of enumValues) {
+    const prefixPattern = new RegExp(`\\b(${enumValue})\\s*[:-]`, 'i');
+    const match = text.match(prefixPattern);
+    if (match) return match[1].toUpperCase() as T[number];
+  }
+  
+  // Pattern 2: Markdown formatting ("**ONE**", "*ONE*")
+  const markdownPattern = /\*\*?([A-Za-z_]+)\*\*?/g;
+  let markdownMatch;
+  while ((markdownMatch = markdownPattern.exec(text)) !== null) {
+    const candidate = markdownMatch[1];
+    for (const enumValue of enumValues) {
+      if (enumValue.toLowerCase() === candidate.toLowerCase()) {
+        return enumValue;
+      }
+    }
+  }
+  
+  // Pattern 3: Quoted values ('"ONE"', "'ONE'")
+  const quotedPattern = /['"]([^'"]+)['"]/g;
+  let quotedMatch;
+  while ((quotedMatch = quotedPattern.exec(text)) !== null) {
+    const candidate = quotedMatch[1];
+    for (const enumValue of enumValues) {
+      if (enumValue.toLowerCase() === candidate.toLowerCase()) {
+        return enumValue;
+      }
+    }
+  }
+  
+  // Pattern 4: Natural language ("The answer is One")
+  for (const enumValue of enumValues) {
+    const wordPattern = new RegExp(`\\b(${enumValue})\\b`, 'i');
+    const match = text.match(wordPattern);
+    if (match) {
+      // Handle case conversion based on schema enum case
+      return enumValue; // Return exact schema case
+    }
+  }
+  
+  throw new Error(`Could not extract enum from text: ${text}`);
+}
+```
+
+#### 6. Integrate Text Extraction in Main Coercer
+**File**: `jsonish/src/coercer.ts`
+**Enhancement**: Update `coerceToEnum()` to use text extraction
+
+```typescript
+// Add to coerceToEnum function after basic strategies
+// Strategy 4: Text extraction
+if (value.type === 'string') {
+  try {
+    return extractEnumFromText(value.value, schema);
+  } catch {
+    // Fall through to error
+  }
 }
 ```
 
 ### Success Criteria:
 
-**Automated verification**
-- [ ] Markdown tests (lines 74-81, 83-90) pass successfully
-- [ ] Complex content tests (lines 169-206) extract correct enum values
-- [ ] Punctuation separation tests (lines 92-99, 101-108) work correctly
+**Automated Verification**
+- [ ] `bun test test/enum.test.ts` - 10/12 tests passing (including text extraction)
+- [ ] `bun build` completes without TypeScript errors  
+- [ ] No regressions in existing functionality
 
 **Manual Verification**
-- [ ] Content extraction works with various markdown formatting
-- [ ] Complex streaming context scenarios handled properly
-- [ ] Mathematical notation and special characters don't interfere with enum extraction
+- [ ] Description extraction: `'"ONE: The description"'` → `"ONE"`
+- [ ] Markdown parsing: `"**one** is the answer"` → `"ONE"` 
+- [ ] Case handling: `"**ONE**"` → `"One"` for `z.enum(["One", "Two"])`
+- [ ] Natural language: `"The answer is One"` → `"ONE"`
+- [ ] Complex scenarios with special characters work
+
+## Phase 3: Advanced String Matching and Error Handling
+
+### Overview
+Implement sophisticated string matching algorithms and comprehensive error detection for ambiguous cases. This phase achieves 12/12 test cases passing with full Rust implementation behavioral parity.
+
+### Changes Required:
+
+#### 7. Create Advanced String Matching Module
+**File**: `jsonish/src/string-matcher.ts` (new file)
+**Purpose**: Multi-tier string matching system adapted from Rust implementation
+
+```typescript
+export interface MatchResult {
+  value: string;
+  confidence: number;
+  tier: number;
+}
+
+export class EnumStringMatcher {
+  // Tier 1: Exact case-sensitive match
+  exactMatch(input: string, candidates: string[]): MatchResult | null
+  
+  // Tier 2: Case-insensitive match
+  caseInsensitiveMatch(input: string, candidates: string[]): MatchResult | null
+  
+  // Tier 3: Punctuation-normalized match  
+  normalizedMatch(input: string, candidates: string[]): MatchResult | null
+  
+  // Tier 4: Substring matching with anti-overlap
+  substringMatch(input: string, candidates: string[]): MatchResult[]
+  
+  // Match with ambiguity detection
+  findBestMatch(input: string, candidates: string[]): MatchResult
+}
+```
+
+#### 8. Implement Ambiguity Detection and Error Handling
+**Enhancement**: Add comprehensive error detection to enum coercion
+
+```typescript
+// Enhanced coerceToEnum with ambiguity detection
+export function coerceToEnum<T extends readonly [string, ...string[]]>(
+  value: Value,
+  schema: z.ZodEnum<T>,
+  ctx?: ParsingContext
+): T[number] {
+  const matcher = new EnumStringMatcher();
+  const enumValues = Object.values(schema.enum) as T;
+  
+  if (value.type === 'string') {
+    try {
+      const result = matcher.findBestMatch(value.value, enumValues);
+      return result.value as T[number];
+    } catch (error) {
+      // Handle ambiguous matches - throw with clear message
+      if (error.message.includes('ambiguous')) {
+        throw new Error(`Ambiguous enum match for "${value.value}": ${error.message}`);
+      }
+      throw error;
+    }
+  }
+  
+  // ... rest of implementation
+}
+```
+
+#### 9. Multi-Value Detection in Text
+**Enhancement**: Detect and reject text with multiple enum values
+
+```typescript
+function validateSingleEnum<T extends readonly [string, ...string[]]>(
+  text: string,
+  enumValues: T,
+  foundValue: T[number]
+): void {
+  let matchCount = 0;
+  for (const enumValue of enumValues) {
+    const pattern = new RegExp(`\\b${enumValue}\\b`, 'gi');
+    if (pattern.test(text)) {
+      matchCount++;
+    }
+  }
+  
+  if (matchCount > 1) {
+    throw new Error(`Multiple enum values found in text: ${text}`);
+  }
+}
+```
+
+### Success Criteria:
+
+**Automated Verification**
+- [ ] `bun test test/enum.test.ts` - All 12/12 tests passing
+- [ ] `bun build` completes without errors  
+- [ ] Full test suite passes: `bun test` (no regressions)
+- [ ] Error cases properly throw for ambiguous matches
+
+**Manual Verification**
+- [ ] Complex streaming text scenarios handled correctly
+- [ ] Ambiguous matches detected and rejected appropriately
+- [ ] Multi-value detection prevents incorrect enum selection
+- [ ] Advanced string matching handles edge cases
 
 ## Test Strategy
 
 ### Unit Tests
-- [ ] String matching algorithm tests for each phase (exact, punctuation-stripped, case-insensitive)
-- [ ] Substring overlap filtering tests with complex input scenarios
-- [ ] Ambiguity detection tests for various edge cases
-- [ ] Optional enum schema tests with null/undefined handling
+- [ ] Basic enum coercion tests in `test/enum.test.ts` 
+- [ ] Text extraction pattern testing
+- [ ] Error case validation (ambiguous matches, multi-values)
+- [ ] Edge cases: empty enums, special characters, unicode
 
-### Integration Tests
-- [ ] End-to-end enum parsing with Zod schema validation
-- [ ] Flag management and scoring integration tests
-- [ ] Error handling and meaningful error message validation
-- [ ] Performance tests for complex text processing scenarios
+### Integration Tests  
+- [ ] End-to-end enum parsing with complex Zod schemas
+- [ ] Union type resolution with enum alternatives
+- [ ] Optional enum handling in various contexts
+- [ ] Performance with large enum sets
 
-### Regression Tests  
-- [ ] All existing 12 passing tests continue to pass
-- [ ] No regressions in other coercer functionality
-- [ ] Deserializer integration remains stable
+### Regression Testing
+- [ ] Ensure no impact on existing string/number/boolean coercion
+- [ ] Verify array parsing still works correctly
+- [ ] Confirm object parsing unaffected
+- [ ] Union resolution compatibility maintained
 
 ## Performance Considerations
 
-**String Matching Efficiency**: The enhanced algorithm processes text more thoroughly but maintains reasonable performance through:
-- Early termination for exact matches
-- Efficient substring search algorithms  
-- Minimal memory allocation for temporary match data
-
-**Content Processing Overhead**: Complex text extraction adds processing time but:
-- Only applies when simple matching fails
-- Caches preprocessing results where possible
-- Uses efficient string manipulation techniques
-
-**Memory Usage**: Enhanced matching requires temporary data structures but:
-- Reuses candidate arrays where possible
-- Releases intermediate match data promptly
-- Maintains similar memory profile to current implementation
+- **String Matching Efficiency**: Implement early termination for exact matches to avoid unnecessary processing
+- **Text Pattern Caching**: Consider regex compilation caching for repeated enum schemas  
+- **Memory Usage**: Minimize string allocations in matching algorithms
+- **Large Enum Sets**: Optimize lookup structures for enums with >50 values
 
 ## Migration Notes
 
-**No Breaking Changes**: All enhancements maintain backward compatibility with existing JSONish parser usage patterns and Zod schema definitions.
-
-**Flag Management**: New flags may be added (`StrMatchOneFromMany` enhancements) but existing flag behavior remains unchanged.
-
-**Error Message Improvements**: Error messages will be more specific and actionable, but error types and throwing behavior align with existing patterns.
+No breaking changes expected. The implementation extends existing functionality without modifying current APIs or behavior for non-enum schemas.
 
 ## References
 
 * Original requirements: `specifications/05-enum-parsing/feature.md`
-* Rust implementation research: `specifications/05-enum-parsing/research_2025-07-23_22-12-46_rust-enum-parsing.md`
-* Current enum coercer: `src/deserializer/coercer/ir_ref/coerce_enum.ts:24`
-* String matching utilities: `src/deserializer/coercer/match_string.ts:34`
-* Test requirements: `test/enum.test.ts` (19 total test cases, 7 currently failing)
-* Deserializer integration: `src/deserializer/coercer/field_type.ts:164`
-* Flag management system: `src/deserializer/deserialize_flags.ts:145-225`
+* Implementation analysis: `specifications/05-enum-parsing/research/research_2025-08-26_11-21-12_enum-parsing-implementation-analysis.md`
+* Test specifications: `test/enum.test.ts` (12 test cases requiring enum functionality)
+* Rust reference: `baml/engine/baml-lib/jsonish/src/deserializer/coercer/ir_ref/coerce_enum.rs`
+* Parser integration: `jsonish/src/parser.ts:544` - missing enum case in coerceValue()
+* Coercer patterns: `jsonish/src/coercer.ts` - established coercion patterns to follow

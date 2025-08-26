@@ -6,7 +6,7 @@ branch: master
 repository: jsonish
 topic: "Basic JSON Parsing Implementation Strategy"
 tags: [implementation, strategy, parser, deserializer, coercer, jsonish, basic-parsing]
-status: complete
+status: completed
 last_updated: 2025-08-26
 last_updated_by: Claude
 type: implementation_strategy
