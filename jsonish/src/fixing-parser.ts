@@ -4,6 +4,14 @@ import { Value } from './value.js';
 export function fixJson(input: string): string {
   let fixed = input.trim();
   
+  // Check if the input looks like mostly valid JSON that just needs comma-number fixing
+  const needsMinimalFix = isWellFormedJsonExceptCommaNumbers(fixed);
+  
+  if (needsMinimalFix) {
+    // Apply only minimal fixes for well-formed JSON
+    fixed = fixCommaSeparatedNumbers(fixed);
+    return fixed;
+  }
   
   // Handle triple-quoted strings: """content""" → "content"
   fixed = fixed.replace(/"""([\s\S]*?)"""/g, (match, content) => {
@@ -39,6 +47,19 @@ export function fixJson(input: string): string {
   
   
   return fixed;
+}
+
+function isWellFormedJsonExceptCommaNumbers(input: string): boolean {
+  // Check if this looks like well-formed JSON that just has comma-separated numbers
+  try {
+    // Try parsing after fixing comma numbers
+    const withFixedNumbers = fixCommaSeparatedNumbers(input);
+    JSON.parse(withFixedNumbers);
+    return true;
+  } catch {
+    // If fixing just comma numbers doesn't make it valid JSON, it needs more complex fixes
+    return false;
+  }
 }
 
 function fixCommaSeparatedNumbers(input: string): string {
@@ -201,8 +222,20 @@ function fixComplexUnquotedValues(input: string): string {
       
       // Check if the value is already quoted
       if (input[i] === '"' || input[i] === "'") {
-        // Value is already quoted, don't modify it
-        result += input[i];
+        // Value is already quoted, consume the entire quoted string without modification
+        const quote = input[i];
+        result += input[i]; // Add opening quote
+        i++;
+        
+        // Add everything until the closing quote
+        while (i < input.length) {
+          result += input[i];
+          if (input[i] === quote && (i === 0 || input[i-1] !== '\\')) {
+            // Found unescaped closing quote
+            break;
+          }
+          i++;
+        }
       } else {
         // Check if we need to quote this unquoted value
         const valueStart = i;
