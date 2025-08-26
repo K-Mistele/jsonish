@@ -209,12 +209,24 @@ function findMeaningfulJsonEnd(jsonStr: string): string | null {
           // Found complete object, not what we're looking for
           return null;
         }
-      } else if (char === ':' || char === ',' || char === '"' || char === "'" || /[a-zA-Z0-9_]/.test(char)) {
+      } else if (char === ':' || char === ',' || char === '"' || char === "'" || char === 'null'[i % 4] || /[0-9]/.test(char)) {
         // This is a meaningful JSON character
         lastMeaningfulPos = i;
-      } else if (depth > 0 && /[a-zA-Z]/.test(char) && !/[{}:,"'\s]/.test(jsonStr[i-1] || '')) {
-        // Looks like we've hit non-JSON text (like "Anything else...")
-        break;
+      } else if (char === '\n' && depth > 0) {
+        // Check if the next non-whitespace line looks like English text rather than JSON
+        let nextLineStart = i + 1;
+        while (nextLineStart < jsonStr.length && /\s/.test(jsonStr[nextLineStart])) {
+          nextLineStart++;
+        }
+        if (nextLineStart < jsonStr.length) {
+          const restOfLine = jsonStr.slice(nextLineStart).split('\n')[0];
+          // If line doesn't start with JSON-like characters and looks like English
+          if (restOfLine && !/^[\s]*["}'\[\],:0-9]/.test(restOfLine) && /[A-Z]/.test(restOfLine[0])) {
+            // This looks like English text, stop here
+            break;
+          }
+        }
+        lastMeaningfulPos = i;
       }
     }
   }
