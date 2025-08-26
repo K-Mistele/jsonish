@@ -423,22 +423,19 @@ function looksLikeJson(str: string): boolean {
 export function isIncompleteQuotedString(str: string): boolean {
   const trimmed = str.trim();
   
-  // Check for unmatched opening quotes
-  const hasOpeningQuote = trimmed.startsWith('"') || trimmed.startsWith("'");
-  const hasClosingQuote = trimmed.endsWith('"') || trimmed.endsWith("'");
+  // Only consider it incomplete if it starts with a quote but doesn't have a matching closing quote
+  // This handles streaming cases like '"pay' but allows cases like '"TWO" is the answer'
   
-  // If it starts with a quote but doesn't end with one, it's incomplete
-  if (hasOpeningQuote && !hasClosingQuote) {
-    return true;
+  if (trimmed.startsWith('"')) {
+    // Look for the closing quote (not at the end, but anywhere)
+    const closingQuoteIndex = trimmed.indexOf('"', 1);
+    return closingQuoteIndex === -1; // Incomplete if no closing quote found
   }
   
-  // Check for mismatched quotes
-  if (hasOpeningQuote && hasClosingQuote) {
-    const openingQuote = trimmed[0];
-    const closingQuote = trimmed[trimmed.length - 1];
-    if (openingQuote !== closingQuote) {
-      return true;
-    }
+  if (trimmed.startsWith("'")) {
+    // Look for the closing quote (not at the end, but anywhere)
+    const closingQuoteIndex = trimmed.indexOf("'", 1);
+    return closingQuoteIndex === -1; // Incomplete if no closing quote found
   }
   
   return false;
@@ -525,6 +522,11 @@ export function extractFromText(input: string, schema: z.ZodType): Value | null 
   // Skip extraction from JSON-like strings to prevent false positives
   if (looksLikeJson(input)) {
     return null;
+  }
+
+  // Check for incomplete quoted strings before extraction
+  if (isIncompleteQuotedString(input)) {
+    throw new Error('Incomplete quoted string - streaming validation failure');
   }
 
   // Extract literals from text (add to extractFromText function)
