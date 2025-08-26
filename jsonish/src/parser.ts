@@ -914,8 +914,12 @@ function coerceArray<T extends z.ZodArray<any>>(value: Value, schema: T, ctx: Pa
           }
           
           if (allWrappingSucceeded && wrappedItems.length > 0) {
-            // Skip Zod validation for arrays containing records
-            return wrappedItems as z.infer<T>;
+            try {
+              return schema.parse(wrappedItems) as z.infer<T>;
+            } catch (error) {
+              // Fall back to bypassing validation if Zod fails
+              return wrappedItems as z.infer<T>;
+            }
           }
         }
       }
@@ -923,20 +927,30 @@ function coerceArray<T extends z.ZodArray<any>>(value: Value, schema: T, ctx: Pa
     
     // Standard array coercion
     const items = value.items.map(item => coerceValue(item, schema.element, newCtx));
-    // Skip Zod validation if element is a record due to Zod v4 bugs
-    if (schema.element instanceof z.ZodRecord) {
-      return items as z.infer<T>;
+    // Try Zod validation first, fall back to bypassing if it fails due to record issues
+    try {
+      return schema.parse(items) as z.infer<T>;
+    } catch (error) {
+      // If validation fails and element is a record, bypass Zod validation due to v4 bugs
+      if (schema.element instanceof z.ZodRecord) {
+        return items as z.infer<T>;
+      }
+      throw error;
     }
-    return schema.parse(items) as z.infer<T>;
   }
   
   // Single value to array wrapping
   const coerced = coerceValue(value, schema.element, newCtx);
-  // Skip Zod validation if element is a record due to Zod v4 bugs
-  if (schema.element instanceof z.ZodRecord) {
-    return [coerced] as z.infer<T>;
+  // Try Zod validation first, fall back to bypassing if it fails due to record issues
+  try {
+    return schema.parse([coerced]) as z.infer<T>;
+  } catch (error) {
+    // If validation fails and element is a record, bypass Zod validation due to v4 bugs
+    if (schema.element instanceof z.ZodRecord) {
+      return [coerced] as z.infer<T>;
+    }
+    throw error;
   }
-  return schema.parse([coerced]) as z.infer<T>;
 }
 
 function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: ParsingContext): z.infer<T> {
