@@ -150,6 +150,32 @@ export function extractFromText(input: string, schema: z.ZodType): Value | null 
     }
   }
   
+  // Extract enums from text: "The answer is ONE" → "ONE"
+  if (schema instanceof z.ZodEnum) {
+    const enumValues = schema.options as readonly string[];
+    const extractedEnum = extractEnumFromText(input, enumValues);
+    if (extractedEnum) {
+      return createStringValue(extractedEnum);
+    }
+  }
+  
+  // Handle wrapped schemas (Optional, Nullable)
+  if (schema instanceof z.ZodOptional) {
+    // For optional schemas, check if there's explicit JSON null first
+    if (/```json\s*null\s*```/i.test(input)) {
+      return null; // Return null to indicate "no value found" for optional
+    }
+    return extractFromText(input, schema._def.innerType);
+  }
+  
+  if (schema instanceof z.ZodNullable) {
+    // For nullable schemas, check if there's explicit JSON null first
+    if (/```json\s*null\s*```/i.test(input)) {
+      return null; // Return null to indicate explicit null
+    }
+    return extractFromText(input, schema._def.innerType);
+  }
+  
   return null;
 }
 
@@ -178,6 +204,91 @@ function getValueAsJavaScript(value: Value): any {
     default:
       return null;
   }
+}
+
+function extractEnumFromText(text: string, enumValues: readonly string[]): string | null {
+  if (!text || typeof text !== 'string') {
+    throw new Error(`Invalid text parameter: ${text}`);
+  }
+  
+  // Remove markdown formatting
+  const cleaned = text.replace(/\*\*/g, '').replace(/\*/g, '');
+  
+  // Find all enum values that appear in the text
+  const foundEnums: { value: string, index: number, exactCase: boolean }[] = [];
+  
+  for (const enumVal of enumValues) {
+    // Look for exact case match as whole word only
+    const regex = new RegExp(`\\b${enumVal}\\b`, 'g');
+    let match;
+    while ((match = regex.exec(cleaned)) !== null) {
+      foundEnums.push({ value: enumVal, index: match.index, exactCase: true });
+    }
+    
+    // Look for case-insensitive match if no exact match found for this enum value
+    if (!foundEnums.some(f => f.value === enumVal && f.exactCase)) {
+      const caseInsensitiveRegex = new RegExp(`\\b${enumVal}\\b`, 'gi');
+      let caseMatch;
+      while ((caseMatch = caseInsensitiveRegex.exec(cleaned)) !== null) {
+        foundEnums.push({ value: enumVal, index: caseMatch.index, exactCase: false });
+      }
+    }
+  }
+  
+  // Filter out ambiguous cases
+  if (foundEnums.length > 1) {
+    // Prioritize exact case matches over case-insensitive matches
+    const exactMatches = foundEnums.filter(e => e.exactCase);
+    const caseInsensitiveMatches = foundEnums.filter(e => !e.exactCase);
+    
+    // If we have exactly one exact match and only case-insensitive matches for other values, prefer the exact match
+    if (exactMatches.length === 1 && caseInsensitiveMatches.length > 0) {
+      return exactMatches[0].value;
+    }
+    
+    // If all matches are case-insensitive, it's ambiguous
+    if (exactMatches.length === 0 && caseInsensitiveMatches.length > 1) {
+      throw new Error('Ambiguous enum value - multiple enum values found');
+    }
+    
+    // Sort by position in text to check for disambiguation patterns
+    foundEnums.sort((a, b) => a.index - b.index);
+    
+    const firstEnum = foundEnums[0];
+    const beforeFirst = cleaned.slice(Math.max(0, firstEnum.index - 3), firstEnum.index);
+    const afterFirst = cleaned.slice(firstEnum.index + firstEnum.value.length);
+    
+    // Check if first enum is in quotes (higher priority)
+    if (/["']\s*$/.test(beforeFirst) && /^\s*["']/.test(afterFirst)) {
+      return firstEnum.value;
+    }
+    
+    // Check if first enum is followed by description indicators
+    if (/^\s*[:\-]/.test(afterFirst)) {
+      // But make sure no other enum values are mentioned later in the text
+      const remainingText = cleaned.slice(firstEnum.index + firstEnum.value.length);
+      const otherEnumValues = enumValues.filter(val => val !== firstEnum.value);
+      
+      for (const otherEnum of otherEnumValues) {
+        const regex = new RegExp(`\\b${otherEnum}\\b`, 'i');
+        if (regex.test(remainingText)) {
+          // Another enum is mentioned later, this is still ambiguous
+          throw new Error('Ambiguous enum value - multiple enum values found');
+        }
+      }
+      
+      return firstEnum.value;
+    }
+    
+    // If we have multiple enums without clear disambiguation, it's ambiguous
+    throw new Error('Ambiguous enum value - multiple enum values found');
+  }
+  
+  if (foundEnums.length === 1) {
+    return foundEnums[0].value;
+  }
+  
+  return null;
 }
 
 function valueToTypeScriptString(value: Value): string {

@@ -543,6 +543,41 @@ function coerceValue<T extends z.ZodType>(value: Value, schema: T, ctx: ParsingC
     return coerceObject(value, schema, ctx) as z.infer<T>;
   }
   
+  if (schema instanceof z.ZodEnum) {
+    return coerceEnum(value, schema) as z.infer<T>;
+  }
+  
+  // Handle wrapped schemas (Optional, Nullable, etc.)
+  if (schema instanceof z.ZodOptional) {
+    // For optional enum schemas, check for explicit JSON null first
+    if (value.type === 'string' && schema._def.innerType instanceof z.ZodEnum) {
+      if (/```json\s*null\s*```/i.test(value.value)) {
+        return undefined as z.infer<T>;
+      }
+    }
+    
+    try {
+      return coerceValue(value, schema._def.innerType, ctx) as z.infer<T>;
+    } catch {
+      return undefined as z.infer<T>;
+    }
+  }
+  
+  if (schema instanceof z.ZodNullable) {
+    // For nullable enum schemas, check for explicit JSON null first
+    if (value.type === 'string' && schema._def.innerType instanceof z.ZodEnum) {
+      if (/```json\s*null\s*```/i.test(value.value)) {
+        return null as z.infer<T>;
+      }
+    }
+    
+    try {
+      return coerceValue(value, schema._def.innerType, ctx) as z.infer<T>;
+    } catch {
+      return null as z.infer<T>;
+    }
+  }
+  
   // Generic fallback
   return schema.parse(coerceValueGeneric(value)) as z.infer<T>;
 }
@@ -849,6 +884,144 @@ function coerceDiscriminatedUnion<T extends z.ZodDiscriminatedUnion<any, any>>(v
   }
   
   return results[0].result as z.infer<T>;
+}
+
+function coerceEnum<T extends z.ZodEnum<any>>(value: Value, schema: T): z.infer<T> {
+  const enumValues = schema.options as readonly string[];
+  
+  if (value.type === 'string') {
+    // Try direct match first
+    const directMatch = enumValues.find(enumVal => enumVal === value.value);
+    if (directMatch) {
+      return directMatch as z.infer<T>;
+    }
+    
+    // Remove quotes if present
+    const unquoted = value.value.replace(/^["']|["']$/g, '');
+    const unquotedMatch = enumValues.find(enumVal => enumVal === unquoted);
+    if (unquotedMatch) {
+      return unquotedMatch as z.infer<T>;
+    }
+    
+    // Try case-insensitive match
+    const caseMatches = enumValues.filter(enumVal => enumVal.toLowerCase() === unquoted.toLowerCase());
+    if (caseMatches.length === 1) {
+      return caseMatches[0] as z.infer<T>;
+    }
+    
+    // Extract from text with extra content (like "ONE: description" or "**one**")
+    const extractedEnum = extractEnumFromText(value.value, enumValues);
+    if (extractedEnum) {
+      return extractedEnum as z.infer<T>;
+    }
+    
+    throw new Error(`No enum value matches: ${value.value}`);
+  }
+  
+  if (value.type === 'array' && value.items.length > 0) {
+    // Take first valid enum from array
+    for (const item of value.items) {
+      try {
+        return coerceEnum(item, schema);
+      } catch {
+        continue;
+      }
+    }
+    throw new Error(`No enum value found in array`);
+  }
+  
+  // Try to convert to string and parse as enum
+  if (value.type !== 'null') {
+    try {
+      const stringValue = createStringValue(coerceToString(value, z.string()));
+      return coerceEnum(stringValue, schema);
+    } catch (error) {
+      // If string coercion also fails, fall through to final error
+    }
+  }
+  
+  throw new Error(`Cannot coerce ${value.type} to enum`);
+}
+
+function extractEnumFromText(text: string, enumValues: readonly string[]): string | null {
+  if (!text || typeof text !== 'string') {
+    throw new Error(`Invalid text parameter: ${text}`);
+  }
+  
+  // Remove markdown formatting
+  const cleaned = text.replace(/\*\*/g, '').replace(/\*/g, '');
+  
+  // Find all enum values that appear in the text
+  const foundEnums: { value: string, index: number, exactCase: boolean }[] = [];
+  
+  for (const enumVal of enumValues) {
+    // Look for exact case match as whole word only
+    const regex = new RegExp(`\\b${enumVal}\\b`, 'g');
+    let match;
+    while ((match = regex.exec(cleaned)) !== null) {
+      foundEnums.push({ value: enumVal, index: match.index, exactCase: true });
+    }
+    
+    // Look for case-insensitive match if no exact match found for this enum value
+    if (!foundEnums.some(f => f.value === enumVal && f.exactCase)) {
+      const caseInsensitiveRegex = new RegExp(`\\b${enumVal}\\b`, 'gi');
+      let caseMatch;
+      while ((caseMatch = caseInsensitiveRegex.exec(cleaned)) !== null) {
+        foundEnums.push({ value: enumVal, index: caseMatch.index, exactCase: false });
+      }
+    }
+  }
+  
+  
+  // Filter out ambiguous cases
+  if (foundEnums.length > 1) {
+    // Prioritize exact case matches over case-insensitive matches
+    const exactMatches = foundEnums.filter(e => e.exactCase);
+    const caseInsensitiveMatches = foundEnums.filter(e => !e.exactCase);
+    
+    // If we have exactly one exact match, prefer it
+    if (exactMatches.length === 1 && caseInsensitiveMatches.length > 0) {
+      return exactMatches[0].value;
+    }
+    
+    // Sort by position in text to check for disambiguation patterns
+    foundEnums.sort((a, b) => a.index - b.index);
+    
+    const firstEnum = foundEnums[0];
+    const beforeFirst = cleaned.slice(Math.max(0, firstEnum.index - 3), firstEnum.index);
+    const afterFirst = cleaned.slice(firstEnum.index + firstEnum.value.length);
+    
+    // Check if first enum is in quotes (higher priority)
+    if (/["']\s*$/.test(beforeFirst) && /^\s*["']/.test(afterFirst)) {
+      return firstEnum.value;
+    }
+    
+    // Check if first enum is followed by description indicators
+    if (/^\s*[:\-]/.test(afterFirst)) {
+      // But make sure no other enum values are mentioned later in the text
+      const remainingText = cleaned.slice(firstEnum.index + firstEnum.value.length);
+      const otherEnumValues = enumValues.filter(val => val !== firstEnum.value);
+      
+      for (const otherEnum of otherEnumValues) {
+        const regex = new RegExp(`\\b${otherEnum}\\b`, 'i');
+        if (regex.test(remainingText)) {
+          // Another enum is mentioned later, this is still ambiguous
+          throw new Error('Ambiguous enum value - multiple enum values found');
+        }
+      }
+      
+      return firstEnum.value;
+    }
+    
+    // If we have multiple enums without clear disambiguation, it's ambiguous
+    throw new Error('Ambiguous enum value - multiple enum values found');
+  }
+  
+  if (foundEnums.length === 1) {
+    return foundEnums[0].value;
+  }
+  
+  return null;
 }
 
 function calculateUnionScore(value: Value, schema: z.ZodType, result: any): number {
