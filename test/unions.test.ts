@@ -222,7 +222,7 @@ describe("Unions", () => {
 								"https://upload.wikimedia.org/wikipedia/en/thumb/2/21/Nvidia_logo.svg/1920px-Nvidia_logo.svg.png",
 						},
 						richText: {
-							text: "### Key Metrics for the Latest Earnings Report (2024-08-28)\\n\\n- **Earnings Per Share (EPS):** $0.68\\n- **Estimated EPS:** $0.64\\n- **Revenue:** $30.04 billion\\n- **Estimated Revenue:** $28.74 billion\\n\\n#### Notable Highlights\\n- NVIDIA exceeded both EPS and revenue estimates for the quarter ending July 28, 2024.\\n- The company continues to show strong growth in its data center and gaming segments.",
+							text: "### Key Metrics for the Latest Earnings Report (2024-08-28)\n\n- **Earnings Per Share (EPS):** $0.68\n- **Estimated EPS:** $0.64\n- **Revenue:** $30.04 billion\n- **Estimated Revenue:** $28.74 billion\n\n#### Notable Highlights\n- NVIDIA exceeded both EPS and revenue estimates for the quarter ending July 28, 2024.\n- The company continues to show strong growth in its data center and gaming segments.",
 						},
 						scatterPlot: undefined,
 						numericalSlider: undefined,
