@@ -9,17 +9,9 @@ export function coerceToString(value: Value, schema: z.ZodString): string {
       return value.value.toString();
     case 'boolean':
       return value.value.toString();
-    case 'null':
-      return 'null';
     case 'object':
-      // Convert object to TypeScript interface-like string representation
-      const objectPairs: string[] = [];
-      for (const [key, val] of value.entries) {
-        const valueStr = valueToTypeScriptString(val);
-        objectPairs.push(`${key}: ${valueStr}`);
-      }
-      return `{${objectPairs.join(', ')}}`;
-    
+    case 'null':
+      // Fall through to error for inappropriate conversions
     case 'array':
       // Convert array to JSON string representation
       const arrayValues = value.items.map(element => getValueAsJavaScript(element));

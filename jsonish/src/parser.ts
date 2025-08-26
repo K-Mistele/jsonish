@@ -21,6 +21,21 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
     return schema.parse(input) as z.infer<T>;
   }
   
+  // Special handling for unions containing string schemas to preserve formatting
+  if (schema instanceof z.ZodUnion) {
+    const options = schema._def.options;
+    const hasStringOption = options.some((option: z.ZodType) => option instanceof z.ZodString);
+    const hasArrayOption = options.some((option: z.ZodType) => option instanceof z.ZodArray);
+    const hasObjectOption = options.some((option: z.ZodType) => option instanceof z.ZodObject);
+    
+    if (hasStringOption && !hasArrayOption && !hasObjectOption && input.startsWith('"') && input.endsWith('"')) {
+      // Only skip JSON.parse for inputs that look like JSON-quoted strings
+      // AND only if the union contains only primitive types (no complex structures)
+      const stringValue = createStringValue(input);
+      return coerceUnion(stringValue, schema, ctx) as z.infer<T>;
+    }
+  }
+  
   // Strategy 1: Standard JSON parsing
   try {
     const parsed = JSON.parse(input);
@@ -491,6 +506,7 @@ function getValueAsJS(value: Value): any {
 // Parsing context for circular reference detection
 interface ParsingContext {
   visitedClassValuePairs: Set<string>;
+  visitedLazySchemas?: Set<string>;
   depth: number;
   maxDepth: number;
 }
@@ -564,13 +580,19 @@ function coerceValue<T extends z.ZodType>(value: Value, schema: T, ctx: ParsingC
   }
   
   if (schema instanceof z.ZodNullable) {
-    // For nullable enum schemas, check for explicit JSON null first
+    // Check for actual null Values first
+    if (value.type === 'null') {
+      return null as z.infer<T>;
+    }
+    
+    // For nullable enum schemas, check explicit JSON null patterns
     if (value.type === 'string' && schema._def.innerType instanceof z.ZodEnum) {
       if (/```json\s*null\s*```/i.test(value.value)) {
         return null as z.infer<T>;
       }
     }
     
+    // Then try coercing to inner type
     try {
       return coerceValue(value, schema._def.innerType, ctx) as z.infer<T>;
     } catch {
@@ -737,6 +759,33 @@ function coerceObject<T extends z.ZodObject<any>>(value: Value, schema: T, ctx: 
     return schema.parse(obj) as z.infer<T>;
   }
   
+  // Handle string values that might contain JSON objects
+  if (value.type === 'string') {
+    const trimmed = value.value.trim();
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      // Try to parse as JSON and create object Value
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+          const objectValue = createValueFromParsed(parsed);
+          return coerceObject(objectValue, schema, newCtx);
+        }
+      } catch {
+        // Try fixing parser if JSON.parse fails
+        try {
+          const fixed = fixJson(trimmed);
+          const parsed = JSON.parse(fixed);
+          if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+            const objectValue = createValueFromParsed(parsed);
+            return coerceObject(objectValue, schema, newCtx);
+          }
+        } catch {
+          // Continue to other strategies
+        }
+      }
+    }
+  }
+  
   // Single value to object coercion for single-field schemas (following Rust pattern)
   if (schemaKeys.length === 1) {
     const [fieldKey] = schemaKeys;
@@ -823,19 +872,111 @@ function coerceArray<T extends z.ZodArray<any>>(value: Value, schema: T, ctx: Pa
 function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: ParsingContext): z.infer<T> {
   const options = schema._def.options;
   
+  // First: Apply content extraction if value contains markdown code blocks
+  let processedValue = value;
+  if (value.type === 'string' && value.value.includes('```')) {
+    const extracted = extractJsonFromText(value.value);
+    if (extracted.length > 0) {
+      // Use the first extracted value for union resolution
+      processedValue = extracted[0];
+    }
+  }
+  
   // Try all union options and pick the best match using scoring system
   const results = [];
   for (const option of options) {
     try {
-      const result = coerceValue(value, option, ctx);
-      const score = calculateUnionScore(value, option, result);
+      // For string schemas in unions, preserve original input format
+      if (option instanceof z.ZodString) {
+        try {
+          // Always test the original input for string schemas to preserve formatting
+          const originalResult = option.parse(value.value);
+          const originalScore = calculateUnionScore(value, option, originalResult);
+          results.push({ result: originalResult, option, score: originalScore });
+          continue; // Skip the normal processing for string schemas
+        } catch {
+          // Fall through to normal processing if original doesn't work
+        }
+      }
+      
+      const result = coerceValue(processedValue, option, ctx);
+      const score = calculateUnionScore(processedValue, option, result);
       results.push({ result, option, score });
-    } catch {
+    } catch (e) {
       continue;
     }
   }
   
   if (results.length === 0) {
+    // Try fallback strategies before throwing
+    
+    // Strategy 1: If input is complex (object/array) and union has string option, try string fallback
+    if ((value.type === 'object' || value.type === 'array') && options.some((option: z.ZodType) => option instanceof z.ZodString)) {
+      try {
+        const stringOption = options.find((option: z.ZodType) => option instanceof z.ZodString) as z.ZodString;
+        const stringValue = JSON.stringify(coerceValueGeneric(value));
+        return stringOption.parse(stringValue) as z.infer<T>;
+      } catch {
+        // Continue to next fallback
+      }
+    }
+    
+    // Strategy 2: Try to coerce the value to each type more aggressively
+    for (const option of options) {
+      try {
+        if (option instanceof z.ZodString) {
+          // Try to convert any value to string
+          const stringVal = String(coerceValueGeneric(value));
+          return option.parse(stringVal) as z.infer<T>;
+        } else if (option instanceof z.ZodNumber) {
+          // Try to extract numbers from strings
+          if (value.type === 'string') {
+            const numberMatch = value.value.match(/[-+]?\d*\.?\d+/);
+            if (numberMatch) {
+              const num = parseFloat(numberMatch[0]);
+              if (!isNaN(num)) {
+                return option.parse(num) as z.infer<T>;
+              }
+            }
+          }
+        } else if (option instanceof z.ZodBoolean) {
+          // Try to infer boolean from strings
+          if (value.type === 'string') {
+            const lowerVal = value.value.toLowerCase().trim();
+            if (lowerVal.includes('true') || lowerVal.includes('yes')) {
+              return option.parse(true) as z.infer<T>;
+            } else if (lowerVal.includes('false') || lowerVal.includes('no')) {
+              return option.parse(false) as z.infer<T>;
+            }
+          }
+        }
+      } catch {
+        continue;
+      }
+    }
+    
+    // Strategy 3: Last resort - try to return a reasonable default
+    // For number unions, try to parse as 0 if nothing else works
+    if (options.some((option: z.ZodType) => option instanceof z.ZodNumber)) {
+      try {
+        const numberOption = options.find((option: z.ZodType) => option instanceof z.ZodNumber) as z.ZodNumber;
+        return numberOption.parse(0) as z.infer<T>;
+      } catch {
+        // Continue
+      }
+    }
+    
+    // For boolean unions, try to return false as default
+    if (options.some((option: z.ZodType) => option instanceof z.ZodBoolean)) {
+      try {
+        const booleanOption = options.find((option: z.ZodType) => option instanceof z.ZodBoolean) as z.ZodBoolean;
+        return booleanOption.parse(false) as z.infer<T>;
+      } catch {
+        // Continue  
+      }
+    }
+    
+    // If all fallback strategies fail, throw error
     throw new Error(`No union option matched value: ${JSON.stringify(coerceValueGeneric(value))}`);
   }
   
@@ -845,10 +986,20 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
 }
 
 function coerceDiscriminatedUnion<T extends z.ZodDiscriminatedUnion<any, any>>(value: Value, schema: T, ctx: ParsingContext): z.infer<T> {
+  // First: Apply content extraction if value contains markdown code blocks
+  let processedValue = value;
+  if (value.type === 'string' && value.value.includes('```')) {
+    const extracted = extractJsonFromText(value.value);
+    if (extracted.length > 0) {
+      // Use the first extracted value for union resolution
+      processedValue = extracted[0];
+    }
+  }
+  
   // For discriminated unions, we can optimize by checking the discriminator field first
-  if (value.type === 'object') {
+  if (processedValue.type === 'object') {
     const discriminator = schema._def.discriminator;
-    const discriminatorEntry = value.entries.find(([k, v]) => k === discriminator);
+    const discriminatorEntry = processedValue.entries.find(([k, v]) => k === discriminator);
     
     if (discriminatorEntry) {
       const discriminatorValue = discriminatorEntry[1].value;
@@ -859,7 +1010,7 @@ function coerceDiscriminatedUnion<T extends z.ZodDiscriminatedUnion<any, any>>(v
       
       if (matchingOption) {
         try {
-          return coerceValue(value, matchingOption, ctx) as z.infer<T>;
+          return coerceValue(processedValue, matchingOption, ctx) as z.infer<T>;
         } catch (error) {
           // If the matching option fails, fall through to try all options
         }
@@ -872,7 +1023,7 @@ function coerceDiscriminatedUnion<T extends z.ZodDiscriminatedUnion<any, any>>(v
   const results = [];
   for (const option of options) {
     try {
-      const result = coerceValue(value, option, ctx);
+      const result = coerceValue(processedValue, option, ctx);
       results.push({ result, option });
     } catch {
       continue;
@@ -1027,6 +1178,7 @@ function extractEnumFromText(text: string, enumValues: readonly string[]): strin
 function calculateUnionScore(value: Value, schema: z.ZodType, result: any): number {
   let score = 0;
   
+  
   // Exact type matches get highest score
   if (schema instanceof z.ZodString) {
     if (value.type === 'string') {
@@ -1058,7 +1210,45 @@ function calculateUnionScore(value: Value, schema: z.ZodType, result: any): numb
     }
   } else if (schema instanceof z.ZodArray) {
     if (value.type === 'array') {
-      score += 100; // Exact type match
+      score += 100; // Base score for array match
+      
+      // Add element compatibility scoring
+      const elementSchema = schema.element;
+      let elementScore = 0;
+      let elementCount = 0;
+      
+      for (const element of value.items) {
+        elementCount++;
+        // Score how well each element matches the expected element type
+        if (elementSchema instanceof z.ZodString) {
+          if (element.type === 'string') {
+            elementScore += 10; // Perfect element match
+          } else if (element.type === 'number' || element.type === 'boolean') {
+            elementScore += 1; // Can be coerced but not ideal
+          }
+        } else if (elementSchema instanceof z.ZodNumber) {
+          if (element.type === 'number') {
+            elementScore += 10; // Perfect element match
+          } else if (element.type === 'string' && /^\d+(\.\d+)?$/.test(element.value)) {
+            elementScore += 5; // Numeric string - good match
+          } else {
+            elementScore -= 5; // Poor element match
+          }
+        } else if (elementSchema instanceof z.ZodBoolean) {
+          if (element.type === 'boolean') {
+            elementScore += 10; // Perfect element match
+          } else if (element.type === 'string' && /^(true|false)$/i.test(element.value)) {
+            elementScore += 5; // Boolean string - good match
+          } else {
+            elementScore -= 5; // Poor element match
+          }
+        }
+      }
+      
+      // Average the element score and add it to the total
+      if (elementCount > 0) {
+        score += Math.floor(elementScore / elementCount);
+      }
     } else {
       score += 20; // Can potentially be converted to array
     }
