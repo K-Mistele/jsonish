@@ -15,6 +15,14 @@ const SEMANTIC_ALIASES: Record<string, string[]> = {
 export function parseBasic<T extends z.ZodType>(input: string, schema: T, options?: ParseOptions): z.infer<T> {
   const ctx = createParsingContext();
   
+  // Early streaming validation for incomplete quoted strings (only for literal unions)
+  if (schema instanceof z.ZodUnion) {
+    const options = schema._def.options;
+    const hasLiteralOptions = options.some((option: z.ZodType) => option instanceof z.ZodLiteral);
+    if (hasLiteralOptions && isIncompleteQuotedString(input)) {
+      throw new Error('Incomplete quoted string - streaming validation failure');
+    }
+  }
   
   // String Schema Priority: Always return raw input when targeting string
   if (schema instanceof z.ZodString) {
@@ -125,9 +133,7 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
   }
   
   // Strategy 7: String fallback with type coercion
-  console.log('DEBUG Strategy 7 - input:', JSON.stringify(input));
   const stringValue = createStringValue(input);
-  console.log('DEBUG Strategy 7 - stringValue.value:', JSON.stringify(stringValue.value));
   return coerceValue(stringValue, schema, ctx);
 }
 
@@ -773,12 +779,17 @@ function coerceObject<T extends z.ZodObject<any>>(value: Value, schema: T, ctx: 
   if (value.type === 'object') {
     const obj: Record<string, any> = {};
     
-    // Initialize optional fields to undefined
+    // Initialize optional fields with appropriate defaults
     for (const [schemaKey, schemaField] of Object.entries(schemaShape)) {
-      const isOptional = schemaField instanceof z.ZodOptional || 
-                        (schemaField instanceof z.ZodNullable && schemaField._def.innerType instanceof z.ZodOptional);
-      if (isOptional) {
-        obj[schemaKey] = undefined;
+      // Check if field is nullable and optional - should default to null
+      const isNullableOptional = (schemaField instanceof z.ZodNullable && schemaField._def.innerType instanceof z.ZodOptional);
+      // Check if field is just optional
+      const isOptional = schemaField instanceof z.ZodOptional;
+      
+      if (isNullableOptional) {
+        obj[schemaKey] = null; // Nullable optional fields default to null
+      } else if (isOptional) {
+        obj[schemaKey] = undefined; // Pure optional fields default to undefined
       }
     }
     
