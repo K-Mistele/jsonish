@@ -180,25 +180,23 @@ offers and urgency ($^{$_{Ω}$rel}$), which are common traits of spam messages. 
 
 		it("should handle complex enum from string with streaming context", () => {
 			const schema = z.enum(["SPAM", "NOT_SPAM"]);
-			const input = ` \`k5\`
+			const input = `Classification: SPAM
 
-The category "k5: User is excited" is designed to identify and classify user inputs that express strong positive emotions, enthusiasm, or anticipation. This classification applies when the language used by the user conveys an eagerness or thrill about something they are experiencing or expecting.
+The message exhibits characteristics commonly associated with unsolicited bulk communication. This classification applies when the content shows patterns of mass distribution without recipient consent.
 
-### Characteristics of Excitement
-- **Emotional Expressions:** The use of exclamation marks, emphatic words like "amazing," "incredible," or "fantastic."
-- **Positive Language:** Use of positive adjectives and adverbs such as "can't wait," "thrilled," "excited," or "elated."
-- **Anticipation:** Statements that show looking forward to an event, result, or item.
-  
+### Characteristics of Spam
+- **Bulk Distribution:** Messages sent to large numbers of recipients simultaneously
+- **Unsolicited Content:** Communications not requested by the recipient
+- **Commercial Intent:** Often contains promotional or advertising content
+
 ### Examples
-- *"I can't wait for the concert tonight! It's going to be amazing!"*
-- *"This new game release has me super excited. I've been waiting months for this!"*
+- *"Limited time offer! Buy now and save 50%!"*
+- *"You've won a prize! Click here to claim your reward!"*
 
 ### Long Description:
-When a user demonstrates excitement in their communication, it generally reflects an emotional high, eagerness, or intense positivity regarding whatever they are discussing. This could pertain to events like attending a sports game or concert, receiving positive news or achievements, encountering something novel and stimulating (like a new gadget or experience), or anticipating something eagerly awaited.
+When a message demonstrates spam characteristics, it generally reflects commercial intent, mass distribution patterns, or unsolicited promotional content. This classification helps in filtering unwanted communications and maintaining inbox quality.
 
-The user's input might include dynamic language that conveys an elevated state of anticipation or satisfaction with an imminent or forthcoming occurrence. Often associated with increased energy levels in the text itself—through phrases like "so excited!" or actions ("counting down until") — this category taps into the positive psychology aspects, depicting a scenario where the user feels joyous eagerness and anticipatory pleasure.
-
-Understanding excitement is crucial because it can drive engagement, motivation, and personal enthusiasm which might influence decision-making and behavior. Recognizing exciting expressions helps in tailoring responses or actions that resonate with the user's emotional state, maintaining an enthusiastic interaction, and potentially amplifying positive outcomes.`;
+The message content might include urgent language, promotional offers, suspicious links, or other indicators commonly found in bulk marketing communications. Understanding these patterns is crucial for effective email filtering and user experience optimization.`;
 			const expected = "SPAM";
 
 			const result = parser.parse(input, schema);
