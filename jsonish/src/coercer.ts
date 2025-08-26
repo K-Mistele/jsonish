@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { Value, createStringValue, createNumberValue, createBooleanValue } from './value.js';
+import { ParsingContext, createParsingContext } from './parser.js';
 
 export function coerceToString(value: Value, schema: z.ZodString): string {
   switch (value.type) {
@@ -14,7 +15,7 @@ export function coerceToString(value: Value, schema: z.ZodString): string {
       // Fall through to error for inappropriate conversions
     case 'array':
       // Convert array to JSON string representation
-      const arrayValues = value.items.map(element => getValueAsJavaScript(element));
+      const arrayValues = value.items.map((element: Value) => getValueAsJavaScript(element));
       return JSON.stringify(arrayValues);
     default:
       throw new Error(`Cannot coerce ${value.type} to string`);
@@ -307,4 +308,247 @@ function valueToTypeScriptString(value: Value): string {
     default:
       return 'unknown';
   }
+}
+
+export function coerceLiteral<T extends z.ZodLiteral<any>>(
+  value: Value, 
+  schema: T, 
+  ctx: ParsingContext = createParsingContext()
+): z.infer<T> {
+  const expectedValue = schema._def.values[0];
+  
+  // Object single-value extraction (following Rust implementation)
+  // Only extract from objects with exactly one key, and only for primitive values
+  if (value.type === 'object' && value.entries.length === 1) {
+    const [key, innerValue] = value.entries[0];
+    if (innerValue.type === 'number' || innerValue.type === 'boolean' || innerValue.type === 'string') {
+      // Recursively coerce the extracted value
+      try {
+        return coerceLiteral(innerValue, schema, ctx);
+      } catch {
+        // If coercion fails, fall through to other strategies
+      }
+    }
+  }
+
+  // Handle string literals with advanced matching
+  if (typeof expectedValue === 'string' && value.type === 'string') {
+    const result = matchStringLiteral(value.value, expectedValue);
+    if (result !== null) {
+      return result as z.infer<T>;
+    }
+  }
+  
+  // Text extraction fallback for string values (but not for JSON-like strings)
+  if (value.type === 'string' && !looksLikeJson(value.value)) {
+    const extracted = extractLiteralFromText(value.value, expectedValue);
+    if (extracted !== null) {
+      return extracted as z.infer<T>;
+    }
+  }
+  
+  // Exact matching for numbers and booleans
+  if (value.type === 'number' && typeof expectedValue === 'number' && value.value === expectedValue) {
+    return expectedValue as z.infer<T>;
+  }
+  
+  if (value.type === 'boolean' && typeof expectedValue === 'boolean' && value.value === expectedValue) {
+    return expectedValue as z.infer<T>;
+  }
+  
+  throw new Error(`Cannot coerce ${JSON.stringify(getValueAsJavaScript(value))} to literal ${JSON.stringify(expectedValue)}`);
+}
+
+function matchStringLiteral(input: string, expected: string): string | null {
+  // Layer 1: Exact case-sensitive match (highest priority)
+  if (input === expected) {
+    return expected;
+  }
+  
+  // Streaming validation: Check for incomplete quoted strings
+  if (isIncompleteQuotedString(input)) {
+    throw new Error('Incomplete quoted string - streaming validation failure');
+  }
+  
+  // Layer 2: Remove quotes and try again
+  const cleanInput = input.replace(/^["']|["']$/g, '');
+  if (cleanInput === expected) {
+    return expected;
+  }
+  
+  // Layer 3: Case-insensitive match
+  if (cleanInput.toLowerCase() === expected.toLowerCase()) {
+    return expected; // Return expected case, not input case
+  }
+  
+  // Layer 4: Punctuation stripping + case-insensitive
+  const normalizedInput = normalizeLiteralString(cleanInput);
+  const normalizedExpected = normalizeLiteralString(expected);
+  if (normalizedInput === normalizedExpected) {
+    return expected;
+  }
+  
+  // Layer 5: Unicode normalization (international support)
+  const unicodeInput = normalizeUnicodeString(cleanInput);
+  const unicodeExpected = normalizeUnicodeString(expected);
+  if (unicodeInput === unicodeExpected) {
+    return expected;
+  }
+  
+  return null;
+}
+
+export function normalizeLiteralString(str: string): string {
+  return str
+    .replace(/[^\w\s-]/g, '') // Keep alphanumeric, whitespace, hyphens
+    .replace(/\s+/g, ' ') // Normalize whitespace
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeUnicodeString(str: string): string {
+  return str
+    .normalize('NFD') // Decompose accented characters
+    .replace(/[\u0300-\u036f]/g, '') // Remove combining diacritical marks  
+    .normalize('NFC') // Recompose
+    .toLowerCase();
+}
+
+function looksLikeJson(str: string): boolean {
+  const trimmed = str.trim();
+  return (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+         (trimmed.startsWith('[') && trimmed.endsWith(']'));
+}
+
+export function isIncompleteQuotedString(str: string): boolean {
+  const trimmed = str.trim();
+  
+  // Check for unmatched opening quotes
+  const hasOpeningQuote = trimmed.startsWith('"') || trimmed.startsWith("'");
+  const hasClosingQuote = trimmed.endsWith('"') || trimmed.endsWith("'");
+  
+  // If it starts with a quote but doesn't end with one, it's incomplete
+  if (hasOpeningQuote && !hasClosingQuote) {
+    return true;
+  }
+  
+  // Check for mismatched quotes
+  if (hasOpeningQuote && hasClosingQuote) {
+    const openingQuote = trimmed[0];
+    const closingQuote = trimmed[trimmed.length - 1];
+    if (openingQuote !== closingQuote) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+function extractLiteralFromText(text: string, expectedValue: any): any | null {
+  if (typeof expectedValue === 'string') {
+    return extractStringLiteralFromText(text, expectedValue);
+  }
+  if (typeof expectedValue === 'number') {
+    // Look for the exact number in text
+    const numberRegex = new RegExp(`\\b${expectedValue}\\b`);
+    if (numberRegex.test(text)) {
+      return expectedValue;
+    }
+  }
+  if (typeof expectedValue === 'boolean') {
+    // Look for the exact boolean in text
+    const boolRegex = new RegExp(`\\b${expectedValue}\\b`, 'i');
+    if (boolRegex.test(text)) {
+      return expectedValue;
+    }
+  }
+  return null;
+}
+
+function extractStringLiteralFromText(text: string, expected: string): string | null {
+  // Direct substring search with case coercion
+  const regex = new RegExp(`\\b${expected}\\b`, 'i');
+  const match = text.match(regex);
+  if (match) {
+    return expected; // Return expected case
+  }
+  
+  // Quote-wrapped search
+  const quotedRegex = new RegExp(`["']([^"']*${expected}[^"']*)["']`, 'i');
+  const quotedMatch = text.match(quotedRegex);
+  if (quotedMatch) {
+    const extracted = quotedMatch[1].trim();
+    if (matchStringLiteral(extracted, expected)) {
+      return expected;
+    }
+  }
+  
+  return null;
+}
+
+// Ambiguity detection for literal unions (only for non-string literals)
+export function detectLiteralAmbiguity(text: string, literalValues: any[]): boolean {
+  if (literalValues.length <= 1) {
+    return false;
+  }
+  
+  // Only check non-string literals for ambiguity
+  // String literals use first-match behavior
+  const nonStringLiterals = literalValues.filter(val => typeof val !== 'string');
+  
+  if (nonStringLiterals.length <= 1) {
+    return false;
+  }
+  
+  const foundLiterals = [];
+  
+  for (const literalValue of nonStringLiterals) {
+    let found = false;
+    
+    if (typeof literalValue === 'number') {
+      const numberRegex = new RegExp(`\\b${literalValue}\\b`);
+      found = numberRegex.test(text);
+    } else if (typeof literalValue === 'boolean') {
+      const boolRegex = new RegExp(`\\b${literalValue}\\b`, 'i');
+      found = boolRegex.test(text);
+    }
+    
+    if (found) {
+      foundLiterals.push(literalValue);
+    }
+  }
+  
+  return foundLiterals.length > 1;
+}
+
+export function extractFromText(input: string, schema: z.ZodType): Value | null {
+  // Skip extraction from JSON-like strings to prevent false positives
+  if (looksLikeJson(input)) {
+    return null;
+  }
+
+  // Extract literals from text (add to extractFromText function)
+  if (schema instanceof z.ZodLiteral) {
+    const extractedLiteral = extractLiteralFromText(input, schema._def.values[0]);
+    if (extractedLiteral !== null) {
+      if (typeof schema._def.values[0] === 'string') {
+        return createStringValue(extractedLiteral);
+      } else if (typeof schema._def.values[0] === 'number') {
+        return createNumberValue(extractedLiteral);
+      } else if (typeof schema._def.values[0] === 'boolean') {
+        return createBooleanValue(extractedLiteral);
+      }
+    }
+  }
+  
+  // Handle enums and other extraction - delegate to existing extractEnumFromText
+  if (schema instanceof z.ZodEnum) {
+    const enumValues = schema.options as readonly string[];
+    const foundEnum = extractEnumFromText(input, enumValues);
+    if (foundEnum !== null) {
+      return createStringValue(foundEnum);
+    }
+  }
+
+  return null;
 }
