@@ -10,6 +10,9 @@ const unionResultCache = new Map<string, {result: any, score: number, timestamp:
 const lazySchemaCache = new WeakMap<z.ZodLazy<any>, z.ZodType>();
 const scoreCache = new Map<string, number>();
 
+// Recursion protection for union resolution
+const recursionStack = new Map<string, number>(); // key -> depth count
+
 // Semantic alias mappings for field names
 const SEMANTIC_ALIASES: Record<string, string[]> = {
   'signature': ['function_signature', 'func_signature', 'method_signature'],
@@ -18,7 +21,6 @@ const SEMANTIC_ALIASES: Record<string, string[]> = {
 };
 
 export function parseBasic<T extends z.ZodType>(input: string, schema: T, options?: ParseOptions): z.infer<T> {
-  console.log('parseBasic called with allowPartial:', options?.allowPartial);
   const ctx = createParsingContext();
   
   // Early streaming validation for incomplete quoted strings (only for literal unions)
@@ -53,42 +55,48 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
   // Strategy 1: Standard JSON parsing
   try {
     const parsed = JSON.parse(input);
-    console.log('Strategy 1 (JSON.parse) succeeded');
     const value = createValueFromParsed(parsed);
     return coerceValue(value, schema, ctx);
   } catch {
-    console.log('Strategy 1 (JSON.parse) failed, continuing...');
     // Continue to other strategies
   }
   
   // Strategy 2: Extract JSON from mixed content (for complex types)
   if (schema instanceof z.ZodObject || schema instanceof z.ZodArray || schema instanceof z.ZodRecord) {
-    console.log('Trying Strategy 2 (extract JSON from mixed content)...');
     const extractedValues = extractJsonFromText(input);
-    console.log('Strategy 2 extracted values:', extractedValues);
     for (const value of extractedValues) {
       try {
-        console.log('Strategy 2 trying to coerce extracted value...');
+        // First try regular coercion
+        const result = coerceValue(value, schema, createParsingContext());
         
-        // If allowPartial is enabled and the value has incomplete data, use partial coercion
-        if (options?.allowPartial && value.completion !== 'Complete') {
-          console.log('Strategy 2 using partial coercion for incomplete value...');
-          return coerceValueWithPartialSupport(value, schema, ctx, input);
+        // If allowPartial is enabled, check if the result might have been degraded due to missing partial data
+        if (options?.allowPartial) {
+          // Check for common signs of degraded results (e.g., empty arrays that should have content)
+          if (schema instanceof z.ZodObject) {
+            const shape = schema.shape;
+            for (const [key, fieldSchema] of Object.entries(shape)) {
+              if (fieldSchema instanceof z.ZodArray && Array.isArray(result[key]) && result[key].length === 0) {
+                // This array field is empty, but the original input might have had partial content
+                // Check if the extracted value had content for this field
+                if (value.type === 'object') {
+                  const fieldValue = value.entries.find(([k, v]) => k === key)?.[1];
+                  if (fieldValue && fieldValue.type === 'array' && fieldValue.items.length > 0) {
+                    return coerceValueWithPartialSupport(value, schema, ctx, input);
+                  }
+                }
+              }
+            }
+          }
         }
         
-        const result = coerceValue(value, schema, createParsingContext());
-        console.log('Strategy 2 succeeded');
         return result;
       } catch (error) {
-        console.log('Strategy 2 coercion failed:', error.message);
-        
         // If regular coercion fails but allowPartial is enabled, try partial coercion
         if (options?.allowPartial) {
           try {
-            console.log('Strategy 2 falling back to partial coercion...');
             return coerceValueWithPartialSupport(value, schema, ctx, input);
           } catch (partialError) {
-            console.log('Strategy 2 partial coercion also failed:', partialError.message);
+            // Continue to next extracted value
           }
         }
         
@@ -124,30 +132,22 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
   
   // Strategy 3: JSON fixing for malformed input
   try {
-    console.log('Trying Strategy 3 (JSON fixing)...');
     const fixed = fixJson(input);
-    console.log('Strategy 3 fixed JSON:', fixed);
     if (fixed !== input) {
       const parsed = JSON.parse(fixed);
       const value = createValueFromParsed(parsed);
-      console.log('Strategy 3 succeeded');
       return coerceValue(value, schema, ctx);
     }
-    console.log('Strategy 3 no changes needed');
-  } catch (error) {
-    console.log('Strategy 3 failed:', error.message);
+  } catch {
     // Continue to other strategies
   }
   
   // Strategy 4: Advanced state machine parsing for complex malformed JSON
   if (schema instanceof z.ZodObject || schema instanceof z.ZodArray || schema instanceof z.ZodRecord) {
     try {
-      console.log('Trying Strategy 4 (advanced state machine parsing)...');
       const { value } = parseWithAdvancedFixing(input);
-      console.log('Strategy 4 succeeded, returning coerced value');
       return coerceValue(value, schema, ctx);
-    } catch (error) {
-      console.log('Strategy 4 failed:', error.message);
+    } catch {
       // Continue to other strategies
     }
   }
@@ -178,23 +178,18 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
 }
 
 function parsePartialValue<T extends z.ZodType>(input: string, schema: T, ctx: ParsingContext): z.infer<T> {
-  console.log('parsePartialValue called with schema type:', schema.constructor.name);
-  
   // For partial parsing, we try to extract whatever valid JSON we can from the incomplete input
   // and then fill missing fields with defaults
   
   if (schema instanceof z.ZodObject) {
-    console.log('Calling parsePartialObject...');
     return parsePartialObject(input, schema, ctx) as z.infer<T>;
   }
   
   if (schema instanceof z.ZodArray) {
-    console.log('Calling parsePartialArray...');
     return parsePartialArray(input, schema, ctx) as z.infer<T>;
   }
   
   if (schema instanceof z.ZodRecord) {
-    console.log('Calling parsePartialRecord...');
     return parsePartialRecord(input, schema, ctx) as z.infer<T>;
   }
   
@@ -227,32 +222,21 @@ function parsePartialObject<T extends z.ZodObject<any>>(input: string, schema: T
     }
   }
   
-  console.log('parsePartialObject extracted partialData:', partialData);
-  
   // Fill the result with available data and defaults for missing fields
   for (const [key, fieldSchema] of Object.entries(shape)) {
-    console.log(`Processing field: ${key}, in partialData: ${key in partialData}`);
     if (key in partialData) {
       try {
         // Try to coerce the available value
-        console.log(`Trying to coerce field ${key}:`, partialData[key]);
         const partialValue = createValueFromParsed(partialData[key]);
         result[key] = coerceValue(partialValue, fieldSchema as z.ZodType, ctx);
-        console.log(`Successfully coerced ${key}:`, result[key]);
       } catch (error) {
-        console.log(`Coercion failed for ${key}:`, error.message);
         // If direct coercion fails, try partial parsing for complex types
         if (fieldSchema instanceof z.ZodArray && partialData[key] && Array.isArray(partialData[key])) {
           // Check if the original input has incomplete array elements for this field
           // If so, return empty array instead of attempting partial parsing
-          console.log(`Checking hasIncompleteArrayElementsForField for key: ${key}`);
-          const hasIncomplete = hasIncompleteArrayElementsForField(input, key);
-          console.log(`hasIncompleteArrayElementsForField result: ${hasIncomplete}`);
-          if (hasIncomplete) {
-            console.log(`Setting ${key} to empty array due to incomplete elements`);
+          if (hasIncompleteArrayElementsForField(input, key)) {
             result[key] = [];
           } else {
-            console.log(`Processing partial array for key: ${key}`);
             // Handle partial arrays - each element might be incomplete
             const partialArray = partialData[key];
             const validElements = [];
@@ -441,8 +425,6 @@ function hasIncompleteArrayElements(input: string): boolean {
 }
 
 function parsePartialArray<T extends z.ZodArray<any>>(input: string, schema: T, ctx: ParsingContext): z.infer<T> {
-  console.log('parsePartialArray called with input:', JSON.stringify(input));
-  
   // For partial arrays, try to parse what we can from incomplete input
   try {
     // First try to extract whatever JSON we can from the incomplete input
@@ -450,68 +432,51 @@ function parsePartialArray<T extends z.ZodArray<any>>(input: string, schema: T, 
     
     // Try to extract using state machine parsing which is more forgiving
     try {
-      console.log('Trying parseWithAdvancedFixing...');
       const { value } = parseWithAdvancedFixing(input);
-      console.log('parseWithAdvancedFixing result:', value);
       
       if (value.type === 'object') {
         // Look for array fields in the parsed object
         for (const [key, val] of value.entries) {
-          console.log(`Found field: ${key}, type: ${val.type}`);
           if (val.type === 'array') {
             partialData = val.items.map(item => getValueAsJS(item));
-            console.log('Found array data:', partialData);
             break; // Use the first array we find
           }
         }
       } else if (value.type === 'array') {
         partialData = value.items.map(item => getValueAsJS(item));
-        console.log('Direct array data:', partialData);
       }
     } catch (error) {
-      console.log('parseWithAdvancedFixing failed:', error.message);
       // If state machine parsing fails, try extracting multiple objects
       const objects = extractMultipleObjects(input);
       partialData = objects.map(obj => getValueAsJS(obj));
-      console.log('extractMultipleObjects data:', partialData);
     }
     
     // If we still have no partial data, try more aggressive parsing
     if (partialData.length === 0) {
-      console.log('No data from first attempts, trying parseIncompleteJson...');
       try {
         const parsedIncomplete = parseIncompleteJson(input);
-        console.log('parseIncompleteJson result:', parsedIncomplete);
         if (typeof parsedIncomplete === 'object' && parsedIncomplete !== null) {
           // Find arrays in the incomplete JSON
           for (const [key, value] of Object.entries(parsedIncomplete)) {
-            console.log(`Checking field ${key}:`, Array.isArray(value) ? 'array' : typeof value);
             if (Array.isArray(value)) {
               partialData = value;
-              console.log('Found incomplete JSON array:', partialData);
               break;
             }
           }
         }
       } catch (error) {
-        console.log('parseIncompleteJson failed:', error.message);
         // Last resort: return empty array
         return [] as z.infer<T>;
       }
     }
     
-    console.log('Final partialData:', partialData);
-    
     // Process each array element and handle partial objects
     const results = [];
     for (const element of partialData) {
       try {
-        console.log('Processing element:', element);
         if (schema.element instanceof z.ZodObject && typeof element === 'object' && element !== null) {
           // For object elements, try partial parsing with defaults for missing fields
-          console.log('Trying parsePartialObjectFromData...');
           const partialElement = parsePartialObjectFromData(element, schema.element, ctx);
-          console.log('Partial element result:', partialElement);
           results.push(partialElement);
         } else {
           // For non-object elements, try direct coercion
@@ -521,15 +486,12 @@ function parsePartialArray<T extends z.ZodArray<any>>(input: string, schema: T, 
         }
       } catch (error) {
         // Skip elements that can't be parsed at all
-        console.warn(`Failed to parse array element:`, error.message);
         continue;
       }
     }
     
-    console.log('parsePartialArray returning:', results);
     return results as z.infer<T>;
   } catch (error) {
-    console.log('parsePartialArray caught error:', error.message);
     // Return empty array if we can't parse anything
     return [] as z.infer<T>;
   }
@@ -669,6 +631,191 @@ function getValueAsJS(value: Value): any {
     default:
       return null;
   }
+}
+
+function coerceValueWithPartialSupport<T extends z.ZodType>(value: Value, schema: T, ctx: ParsingContext, originalInput: string): z.infer<T> {
+  // Special handling for partial values - use the same logic as parsePartialValue but with already extracted Value
+  
+  if (schema instanceof z.ZodObject) {
+    return coerceObjectWithPartialSupport(value, schema, ctx, originalInput) as z.infer<T>;
+  }
+  
+  if (schema instanceof z.ZodArray) {
+    return coerceArrayWithPartialSupport(value, schema, ctx, originalInput) as z.infer<T>;
+  }
+  
+  if (schema instanceof z.ZodRecord) {
+    return coerceRecordWithPartialSupport(value, schema, ctx, originalInput) as z.infer<T>;
+  }
+  
+  // For other types, fall back to normal coercion
+  return coerceValue(value, schema, ctx);
+}
+
+function coerceObjectWithPartialSupport<T extends z.ZodObject<any>>(value: Value, schema: T, ctx: ParsingContext, originalInput: string): z.infer<T> {
+  const shape = schema.shape;
+  const result: Record<string, any> = {};
+  
+  // Convert Value to JS object
+  let partialData: any = {};
+  if (value.type === 'object') {
+    for (const [key, val] of value.entries) {
+      partialData[key] = getValueAsJS(val);
+    }
+  }
+  
+  // Fill the result with available data and defaults for missing fields
+  for (const [key, fieldSchema] of Object.entries(shape)) {
+    if (key in partialData) {
+      try {
+        // Try to coerce the available value
+        // Special handling for array fields with partial objects
+        if (fieldSchema instanceof z.ZodArray && Array.isArray(partialData[key])) {
+          // Handle each array element with partial support
+          const validElements = [];
+          
+          for (const element of partialData[key]) {
+            try {
+              if (typeof element === 'object' && element !== null) {
+                // For object elements, check if it has all required fields or if some are missing
+                if (fieldSchema.element instanceof z.ZodObject) {
+                  const elementShape = fieldSchema.element.shape;
+                  let missingFields = false;
+                  
+                  // Check if any fields are missing (not just checking if they're required)
+                  for (const [fieldKey, fieldType] of Object.entries(elementShape)) {
+                    if (!(fieldKey in element)) {
+                      missingFields = true;
+                    }
+                  }
+                  
+                  if (missingFields) {
+                    // Use partial object parsing to fill missing fields with defaults
+                    const partialElementResult = parsePartialObjectFromData(element, fieldSchema.element, ctx);
+                    validElements.push(partialElementResult);
+                  } else {
+                    // All fields present, use normal coercion
+                    const elementValue = createValueFromParsed(element);
+                    const coercedElement = coerceValue(elementValue, fieldSchema.element, ctx);
+                    validElements.push(coercedElement);
+                  }
+                } else {
+                  // Non-object element schema, try direct coercion
+                  const elementValue = createValueFromParsed(element);
+                  const coercedElement = coerceValue(elementValue, fieldSchema.element, ctx);
+                  validElements.push(coercedElement);
+                }
+              } else {
+                // For non-object elements, just try direct coercion
+                const elementValue = createValueFromParsed(element);
+                const coercedElement = coerceValue(elementValue, fieldSchema.element, ctx);
+                validElements.push(coercedElement);
+              }
+            } catch (elementError) {
+              // If element coercion fails but element schema is object, try partial object parsing
+              if (fieldSchema.element instanceof z.ZodObject && typeof element === 'object' && element !== null) {
+                try {
+                  const partialElementResult = parsePartialObjectFromData(element, fieldSchema.element, ctx);
+                  validElements.push(partialElementResult);
+                } catch (partialError) {
+                  // Skip this element if we can't parse it at all
+                }
+              }
+            }
+          }
+          
+          result[key] = validElements;
+        } else {
+          // For non-array fields, use normal coercion
+          const partialValue = createValueFromParsed(partialData[key]);
+          result[key] = coerceValue(partialValue, fieldSchema as z.ZodType, ctx);
+        }
+      } catch (error) {
+        // If direct coercion fails, try partial parsing for complex types
+        if (fieldSchema instanceof z.ZodArray && partialData[key] && Array.isArray(partialData[key])) {
+          console.log(`Handling partial array for key: ${key}`);
+          
+          // Handle partial arrays - each element might be incomplete
+          const partialArray = partialData[key];
+          const validElements = [];
+          
+          for (const element of partialArray) {
+            try {
+              if (typeof element === 'object' && element !== null) {
+                // For object elements, check if it has all required fields or if some are missing
+                if (fieldSchema.element instanceof z.ZodObject) {
+                  const elementShape = fieldSchema.element.shape;
+                  let missingFields = false;
+                  
+                  // Check if any required fields are missing
+                  for (const [fieldKey, fieldType] of Object.entries(elementShape)) {
+                    if (!(fieldKey in element)) {
+                      console.log(`Field ${fieldKey} missing from element, will fill with defaults`);
+                      missingFields = true;
+                    }
+                  }
+                  
+                  if (missingFields) {
+                    // Use partial object parsing to fill missing fields with defaults
+                    const partialElementResult = parsePartialObjectFromData(element, fieldSchema.element, ctx);
+                    validElements.push(partialElementResult);
+                  } else {
+                    // All fields present, use normal coercion
+                    const elementValue = createValueFromParsed(element);
+                    const coercedElement = coerceValue(elementValue, fieldSchema.element, ctx);
+                    validElements.push(coercedElement);
+                  }
+                } else {
+                  // Non-object element schema, try direct coercion
+                  const elementValue = createValueFromParsed(element);
+                  const coercedElement = coerceValue(elementValue, fieldSchema.element, ctx);
+                  validElements.push(coercedElement);
+                }
+              } else {
+                // For non-object elements, just try direct coercion
+                const elementValue = createValueFromParsed(element);
+                const coercedElement = coerceValue(elementValue, fieldSchema.element, ctx);
+                validElements.push(coercedElement);
+              }
+            } catch (elementError) {
+              // If element coercion fails but element schema is object, try partial object parsing
+              if (fieldSchema.element instanceof z.ZodObject && typeof element === 'object' && element !== null) {
+                try {
+                  const partialElementResult = parsePartialObjectFromData(element, fieldSchema.element, ctx);
+                  validElements.push(partialElementResult);
+                } catch {
+                  // Skip this element if we can't parse it at all
+                  console.warn(`Skipping unparseable array element:`, element);
+                }
+              } else {
+                console.warn(`Failed to parse array element:`, elementError.message);
+              }
+            }
+          }
+          
+          result[key] = validElements;
+        } else {
+          // If coercion fails, use default
+          result[key] = getDefaultValue(fieldSchema as z.ZodType);
+        }
+      }
+    } else {
+      // Field is missing, use default
+      result[key] = getDefaultValue(fieldSchema as z.ZodType);
+    }
+  }
+  
+  return result as z.infer<T>;
+}
+
+function coerceArrayWithPartialSupport<T extends z.ZodArray<any>>(value: Value, schema: T, ctx: ParsingContext, originalInput: string): z.infer<T> {
+  // For now, delegate to normal array coercion - the object partial support should handle array fields
+  return coerceArray(value, schema, ctx);
+}
+
+function coerceRecordWithPartialSupport<T extends z.ZodRecord<any, any>>(value: Value, schema: T, ctx: ParsingContext, originalInput: string): z.infer<T> {
+  // For now, delegate to normal record coercion
+  return coerceRecord(value, schema, ctx);
 }
 
 // Parsing context for circular reference detection
@@ -1114,9 +1261,14 @@ function getValueHash(value: Value): string {
     case 'null':
       return `${value.type}:null`;
     case 'array':
-      return `arr:${value.items.length}:${value.completion}`;
+      // Include first and last item hash to distinguish different arrays with same length
+      const firstItem = value.items[0] ? getValueHash(value.items[0]).substring(0, 10) : 'empty';
+      const lastItem = value.items.length > 1 ? getValueHash(value.items[value.items.length - 1]).substring(0, 10) : firstItem;
+      return `arr:${value.items.length}:${firstItem}:${lastItem}:${value.completion}`;
     case 'object':
-      return `obj:${value.entries.length}:${value.completion}`;
+      // Include field names in hash to distinguish different object structures
+      const fieldNames = value.entries.map(([key, _]) => key).sort().join(',');
+      return `obj:${fieldNames}:${value.completion}`;
     default:
       return `unknown:${value.type}`;
   }
@@ -1365,91 +1517,120 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
   const options = schema._def.options;
   const cacheKey = createEfficientCacheKey(value, schema);
   
-  // Cache hit - but let's debug what's happening
+  // Cache hit check - essential for preventing infinite recursion
   const cached = unionResultCache.get(cacheKey);
   if (cached && (Date.now() - cached.timestamp) < 10000) { // 10s cache TTL
-    console.log(`Cache HIT for key: ${cacheKey}, returning:`, JSON.stringify(cached.result));
     return cached.result as z.infer<T>;
-  } else {
-    console.log(`Cache MISS for key: ${cacheKey}, value:`, JSON.stringify(coerceValueGeneric(value)));
   }
-  
-  // First: Apply content extraction if value contains markdown code blocks
-  let processedValue = value;
-  if (value.type === 'string' && value.value.includes('```')) {
-    const extracted = extractJsonFromText(value.value);
-    if (extracted.length > 0) {
-      // Use the first extracted value for union resolution
-      processedValue = extracted[0];
+
+  // Recursion protection - prevent infinite loops in recursive schemas
+  const currentDepth = recursionStack.get(cacheKey) || 0;
+  if (currentDepth >= 25) { // Balanced recursion limit to prevent infinite loops while allowing legitimate recursion
+    // Return a reasonable fallback based on the value type
+    if (value.type === 'string') {
+      return value.value as z.infer<T>;
+    } else if (value.type === 'number') {
+      return value.value as z.infer<T>;
+    } else if (value.type === 'boolean') {
+      return value.value as z.infer<T>;
+    } else if (value.type === 'null') {
+      return null as z.infer<T>;
+    } else if (value.type === 'array') {
+      // For arrays, return the coerced JS array to avoid further recursion
+      return coerceValueGeneric(value) as z.infer<T>;
+    } else if (value.type === 'object') {
+      // For objects, return the coerced JS object to avoid further recursion
+      return coerceValueGeneric(value) as z.infer<T>;
+    } else {
+      // For other complex types, throw error
+      throw new Error(`Recursion detected in union resolution for: ${cacheKey}`);
     }
   }
   
-  // Check for ambiguous literal unions and streaming validation before trying options
-  if (processedValue.type === 'string') {
-    const literalOptions = options.filter((option: z.ZodType) => option instanceof z.ZodLiteral);
-    if (literalOptions.length > 0) {
-      // Check for streaming validation failure (incomplete quoted strings)
-      if (isIncompleteQuotedString(processedValue.value)) {
-        throw new Error('Incomplete quoted string - streaming validation failure');
+  recursionStack.set(cacheKey, currentDepth + 1);
+  
+  try {
+    // First: Apply content extraction if value contains markdown code blocks
+    let processedValue = value;
+    if (value.type === 'string' && value.value.includes('```')) {
+      const extracted = extractJsonFromText(value.value);
+      if (extracted.length > 0) {
+        // Use the first extracted value for union resolution
+        processedValue = extracted[0];
       }
-      
-      // Check for ambiguity in non-string literals
-      if (literalOptions.length > 1) {
-        const literalValues = literalOptions.map((option: z.ZodLiteral<any>) => option._def.values[0]);
-        if (detectLiteralAmbiguity(processedValue.value, literalValues)) {
-          throw new Error('Ambiguous literal union - multiple literal values found in text');
+    }
+    
+    // Check for ambiguous literal unions and streaming validation before trying options
+    if (processedValue.type === 'string') {
+      const literalOptions = options.filter((option: z.ZodType) => option instanceof z.ZodLiteral);
+      if (literalOptions.length > 0) {
+        // Check for streaming validation failure (incomplete quoted strings)
+        if (isIncompleteQuotedString(processedValue.value)) {
+          throw new Error('Incomplete quoted string - streaming validation failure');
+        }
+        
+        // Check for ambiguity in non-string literals
+        if (literalOptions.length > 1) {
+          const literalValues = literalOptions.map((option: z.ZodLiteral<any>) => option._def.values[0]);
+          if (detectLiteralAmbiguity(processedValue.value, literalValues)) {
+            throw new Error('Ambiguous literal union - multiple literal values found in text');
+          }
         }
       }
     }
-  }
-  
-  // Phase 1: Fast path disabled for debugging
-  // TODO: Re-enable after fixing the correctness issue
-  
-  // Phase 2: Full scoring approach with caching but without custom visitor pattern
-  const results = [];
-  for (const option of options) {
-    try {
-      // For string schemas in unions, preserve original input format
-      if (option instanceof z.ZodString) {
-        try {
-          // Always test the original input for string schemas to preserve formatting
-          const originalResult = option.parse(value.type === 'string' ? value.value : String((value as any).value || ''));
-          const originalScore = calculateUnionScore(value, option, originalResult);
-          results.push({ result: originalResult, option, score: originalScore });
-          continue; // Skip the normal processing for string schemas
-        } catch {
-          // Fall through to normal processing if original doesn't work
+    
+    // Phase 1: Fast path disabled for debugging
+    // TODO: Re-enable after fixing the correctness issue
+    
+    // Phase 2: Full scoring approach with caching but without custom visitor pattern
+    const results = [];
+    for (const option of options) {
+      try {
+        // For string schemas in unions, preserve original input format
+        if (option instanceof z.ZodString) {
+          try {
+            // Always test the original input for string schemas to preserve formatting
+            const originalResult = option.parse(value.type === 'string' ? value.value : String((value as any).value || ''));
+            const originalScore = calculateUnionScore(value, option, originalResult);
+            results.push({ result: originalResult, option, score: originalScore });
+            continue; // Skip the normal processing for string schemas
+          } catch {
+            // Fall through to normal processing if original doesn't work
+          }
         }
+        
+        const result = coerceValue(processedValue, option, ctx);
+        const score = calculateUnionScore(processedValue, option, result);
+        results.push({ result, option, score });
+        
+        // Early termination for perfect matches
+        if (score >= 100) {
+          unionResultCache.set(cacheKey, {result, score, timestamp: Date.now()});
+          return result as z.infer<T>;
+        }
+      } catch (e) {
+        continue;
       }
-      
-      const result = coerceValue(processedValue, option, ctx);
-      const score = calculateUnionScore(processedValue, option, result);
-      console.log(`Option: ${option.constructor.name}, Score: ${score}, Result:`, JSON.stringify(result));
-      results.push({ result, option, score });
-      
-      // Early termination for perfect matches
-      if (score >= 100) {
-        console.log(`Early termination - caching result for key: ${cacheKey}, result:`, JSON.stringify(result));
-        unionResultCache.set(cacheKey, {result, score, timestamp: Date.now()});
-        return result as z.infer<T>;
-      }
-    } catch (e) {
-      console.log(`Option ${option.constructor.name} failed:`, e instanceof Error ? e.message : String(e));
-      continue;
+    }
+    
+    if (results.length === 0) {
+      throw new Error(`No union option matched value: ${JSON.stringify(coerceValueGeneric(value))}`);
+    }
+    
+    // Sort by score (higher is better) and return the best match
+    results.sort((a, b) => b.score - a.score);
+    const bestResult = results[0].result as z.infer<T>;
+    unionResultCache.set(cacheKey, {result: bestResult, score: results[0].score, timestamp: Date.now()});
+    return bestResult;
+  } finally {
+    // Decrement recursion depth
+    const newDepth = currentDepth - 1;
+    if (newDepth <= 0) {
+      recursionStack.delete(cacheKey);
+    } else {
+      recursionStack.set(cacheKey, newDepth);
     }
   }
-  
-  if (results.length === 0) {
-    throw new Error(`No union option matched value: ${JSON.stringify(coerceValueGeneric(value))}`);
-  }
-  
-  // Sort by score (higher is better) and return the best match
-  results.sort((a, b) => b.score - a.score);
-  const bestResult = results[0].result as z.infer<T>;
-  console.log(`Caching result for key: ${cacheKey}, result:`, JSON.stringify(bestResult));
-  unionResultCache.set(cacheKey, {result: bestResult, score: results[0].score, timestamp: Date.now()});
-  return bestResult;
 }
 
 function coerceDiscriminatedUnion<T extends z.ZodDiscriminatedUnion<any, any>>(value: Value, schema: T, ctx: ParsingContext): z.infer<T> {
@@ -1724,42 +1905,49 @@ function calculateUnionScore(value: Value, schema: z.ZodType, result: any): numb
     if (value.type === 'array') {
       score += 100; // Base score for array match
       
-      // Add element compatibility scoring
+      // For complex element schemas (like JsonValue unions), give significant bonus to prevent recursion issues
       const elementSchema = schema.element;
-      let elementScore = 0;
-      let elementCount = 0;
-      
-      for (const element of value.items) {
-        elementCount++;
-        // Score how well each element matches the expected element type
-        if (elementSchema instanceof z.ZodString) {
-          if (element.type === 'string') {
-            elementScore += 10; // Perfect element match
-          } else if (element.type === 'number' || element.type === 'boolean') {
-            elementScore += 1; // Can be coerced but not ideal
-          }
-        } else if (elementSchema instanceof z.ZodNumber) {
-          if (element.type === 'number') {
-            elementScore += 10; // Perfect element match
-          } else if (element.type === 'string' && /^\d+(\.\d+)?$/.test(element.value)) {
-            elementScore += 5; // Numeric string - good match
-          } else {
-            elementScore -= 5; // Poor element match
-          }
-        } else if (elementSchema instanceof z.ZodBoolean) {
-          if (element.type === 'boolean') {
-            elementScore += 10; // Perfect element match
-          } else if (element.type === 'string' && /^(true|false)$/i.test(element.value)) {
-            elementScore += 5; // Boolean string - good match
-          } else {
-            elementScore -= 5; // Poor element match
+      if (elementSchema instanceof z.ZodLazy || elementSchema instanceof z.ZodUnion) {
+        // For recursive/union element schemas, give high bonus if we have valid array structure
+        score += 20; // High bonus for having array structure with complex elements
+      } else {
+        // Add element compatibility scoring for simple element types
+        let elementScore = 0;
+        let elementCount = 0;
+        
+        for (const element of value.items) {
+          elementCount++;
+          // Score how well each element matches the expected element type
+          if (elementSchema instanceof z.ZodString) {
+            if (element.type === 'string') {
+              elementScore += 10; // Perfect element match
+            } else if (element.type === 'number' || element.type === 'boolean') {
+              elementScore -= 5; // Penalty for type mismatch that needs coercion
+            }
+          } else if (elementSchema instanceof z.ZodNumber) {
+            if (element.type === 'number') {
+              elementScore += 10; // Perfect element match
+            } else if (element.type === 'string' && /^\d+(\.\d+)?$/.test(element.value)) {
+              elementScore += 5; // Numeric string - good match
+            } else {
+              elementScore -= 10; // Strong penalty for non-numeric types
+            }
+          } else if (elementSchema instanceof z.ZodBoolean) {
+            if (element.type === 'boolean') {
+              elementScore += 10; // Perfect element match
+            } else if (element.type === 'string' && /^(true|false)$/i.test(element.value)) {
+              elementScore += 5; // Boolean string - good match
+            } else {
+              elementScore -= 10; // Strong penalty for non-boolean types
+            }
           }
         }
-      }
-      
-      // Average the element score and add it to the total
-      if (elementCount > 0) {
-        score += Math.floor(elementScore / elementCount);
+        
+        // Average the element score and add it to the total
+        if (elementCount > 0) {
+          const avgElementScore = Math.floor(elementScore / elementCount);
+          score += avgElementScore; // Allow negative scores to penalize mismatches
+        }
       }
     } else {
       score += 20; // Can potentially be converted to array
