@@ -62,9 +62,9 @@ JSONish is a TypeScript library that provides a robust, schema-aware JSON parser
 
 ## Development Commands:
 
-- `bun test` - Run the full test suite (236+ tests)
+- `bun run tests` - Run the full test suite (236+ tests)
 - `bun test ./test/basics.test.ts` - Run specific test file
-- `bun test --watch` - Run tests in watch mode during development
+- `bun run tests --watch` - Run tests in watch mode during development
 - `bun build` - Build the TypeScript project
 - `bun build:declaration` - Type check through build process
 - `bun install` - Install dependencies
@@ -73,7 +73,7 @@ JSONish is a TypeScript library that provides a robust, schema-aware JSON parser
 ## Pre-commit Checks:
 
 Before committing, ensure:
-- All tests pass: `bun test`
+- All tests pass: `bun run tests`
 - Build succeeds: `bun build`
 - No TypeScript errors: `bun build:declaration`
 

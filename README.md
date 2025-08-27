@@ -310,7 +310,7 @@ This project uses Bun for development:
 bun install
 
 # Run tests
-bun test
+bun run tests
 
 # Run specific test file
 bun test test/basics.test.ts

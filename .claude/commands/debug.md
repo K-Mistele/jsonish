@@ -33,7 +33,7 @@ I can investigate test failures, parser traces, TypeScript errors, and recent ch
 You have access to these key locations and tools:
 
 **Test Output**:
-- Run all tests: `bun test`
+- Run all tests: `bun run tests`
 - Run specific test: `bun test ./test/basics.test.ts`
 - Run test with filter: `bun test -t "parses simple object"`
 - Test files: `test/` directory (236+ test cases)
@@ -266,10 +266,10 @@ bunx tsc --noEmit src/deserializer/deserializer.ts
 
 **Test Commands**:
 ```bash
-bun test                        # Run all tests
+bun run tests                        # Run all tests
 bun test -t "test name"        # Run specific test
 bun test ./test/file.test.ts   # Run specific file
-bun test --watch               # Watch mode
+bun run tests --watch               # Watch mode
 ```
 
 **Parser Flow**:

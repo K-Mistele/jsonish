@@ -20,8 +20,8 @@ When invoked:
    git log --oneline -n 20
    git diff HEAD~N..HEAD  # Where N covers implementation commits
 
-   # Run JSONish test suite (236+ tests)
-   bun test
+   # Run JSONish test suite (236+ tests) -- NOT bun test since that will catch some tests we don't want.
+   bun run tests
    bun test:coverage  # If available
    
    # Build and type check
@@ -80,8 +80,8 @@ For each phase in the implementation plan document:
    - Execute each command from "Automated Verification" section
    - Use JSONish specific validation:
      ```bash
-     # Run full test suite
-     bun test
+     # Run full test suite -- NOT bun test since that will catch tests we don't want
+     bun run tests 
      
      # Run specific test categories
      bun test ./test/basics.test.ts

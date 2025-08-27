@@ -34,7 +34,8 @@ The main entrypoint to the package should be a parse() function where I pass in 
   bun install
 
   # Run tests (236+ test cases)
-  bun test
+  # NOT bun test - this will also match tests in the baml/ codebase which we don't want.
+  bun run tests 
 
   # Run specific test file
   bun test ./test/basics.test.ts

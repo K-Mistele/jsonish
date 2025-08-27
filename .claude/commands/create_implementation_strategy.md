@@ -198,7 +198,7 @@ Then wait for the user's input.
 ### Success Criteria:
 
 **Automated verification**
-- [ ] `bun test` passes all tests
+- [ ] `bun run tests` passes all tests
 - [ ] `bun build` completes without errors
 - [ ] No TypeScript errors
 
