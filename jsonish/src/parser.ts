@@ -881,12 +881,12 @@ function coerceValue<T extends z.ZodType>(value: Value, schema: T, ctx: ParsingC
     return schema.parse(null) as z.infer<T>;
   }
   
-  if (schema instanceof z.ZodUnion) {
-    return coerceUnion(value, schema, ctx) as z.infer<T>;
-  }
-  
   if (schema instanceof z.ZodDiscriminatedUnion) {
     return coerceDiscriminatedUnion(value, schema, ctx) as z.infer<T>;
+  }
+  
+  if (schema instanceof z.ZodUnion) {
+    return coerceUnion(value, schema, ctx) as z.infer<T>;
   }
   
   if (schema instanceof z.ZodArray) {
@@ -1056,12 +1056,23 @@ function generateCircularKey(schemaId: string, value: Value): string {
   return `${schemaId}:${value.type}:${hashValueStructure(value)}`;
 }
 
-function hashValueStructure(value: Value): string {
+function hashValueStructure(value: Value, depth: number = 0): string {
+  // Limit recursion depth for hashing to prevent infinite loops
+  if (depth > 2) {
+    return `${value.type}:deep`;
+  }
+  
   switch (value.type) {
     case 'object':
-      // Hash based on field names and types, not values
+      // Hash based on field names, types, and a sample of values to distinguish different objects
       const fieldSig = value.entries
-        .map(([key, val]) => `${key}:${val.type}`)
+        .map(([key, val]) => {
+          // Include a hash of the value to distinguish objects with same structure but different content
+          const valueHash = val.type === 'object' ? hashValueStructure(val, depth + 1) : 
+                           val.type === 'array' ? `arr${val.items.length}` :
+                           String(val.value).substring(0, 5);
+          return `${key}:${val.type}:${valueHash}`;
+        })
         .sort()
         .join(',');
       return `obj(${fieldSig})`;
@@ -1381,9 +1392,12 @@ function getValueHash(value: Value): string {
       const lastItem = value.items.length > 1 ? getValueHash(value.items[value.items.length - 1]).substring(0, 10) : firstItem;
       return `arr:${value.items.length}:${firstItem}:${lastItem}:${value.completion}`;
     case 'object':
-      // Include field names in hash to distinguish different object structures
-      const fieldNames = value.entries.map(([key, _]) => key).sort().join(',');
-      return `obj:${fieldNames}:${value.completion}`;
+      // Include field names and values in hash to distinguish different object structures
+      const fieldHashes = value.entries
+        .map(([key, val]) => `${key}:${getValueHash(val).substring(0, 10)}`)
+        .sort()
+        .join(',');
+      return `obj:${fieldHashes}:${value.completion}`;
     default:
       return `unknown:${value.type}`;
   }
@@ -1668,6 +1682,11 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
   // Cache hit check - essential for preventing infinite recursion
   const cached = unionResultCache.get(cacheKey);
   if (cached && (Date.now() - cached.timestamp) < 10000) { // 10s cache TTL
+    // Debug logging for cache hits (disabled)
+    // if (value.type === 'object') {
+    //   console.log(`[DEBUG UNION] CACHE HIT for object:`, JSON.stringify(coerceValueGeneric(value)), 
+    //               `-> result:`, JSON.stringify(cached.result));
+    // }
     return cached.result as z.infer<T>;
   }
 
@@ -1747,8 +1766,21 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
           }
         }
         
+        // Debug logging for recursive union issue (disabled)
+        // if (processedValue.type === 'object') {
+        //   console.log(`[DEBUG UNION] Trying option ${option.constructor.name} with object:`, 
+        //     JSON.stringify(coerceValueGeneric(processedValue)));
+        // }
+        
         const result = coerceValue(processedValue, option, ctx);
         const score = calculateUnionScore(processedValue, option, result);
+        
+        // Debug logging for successful coercions (disabled)
+        // if (processedValue.type === 'object') {
+        //   console.log(`[DEBUG UNION] SUCCESS - ${option.constructor.name} score: ${score}, result:`, 
+        //     JSON.stringify(result));
+        // }
+        
         results.push({ result, option, score });
         
         // Early termination for perfect matches
@@ -1757,6 +1789,10 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
           return result as z.infer<T>;
         }
       } catch (e) {
+        // Debug logging for failed coercions (disabled)
+        // if (processedValue.type === 'object') {
+        //   console.log(`[DEBUG UNION] FAILED - ${option.constructor.name} error:`, e.message);
+        // }
         continue;
       }
     }
@@ -1793,8 +1829,6 @@ function coerceDiscriminatedUnion<T extends z.ZodDiscriminatedUnion<any, any>>(v
   }
   
   // For discriminated unions, we can optimize by checking the discriminator field first
-  // TODO: Fix discriminated union optimization
-  /*
   if (processedValue.type === 'object') {
     const discriminator = schema._def.discriminator;
     const discriminatorEntry = processedValue.entries.find(([k, v]) => k === discriminator);
@@ -1803,8 +1837,23 @@ function coerceDiscriminatedUnion<T extends z.ZodDiscriminatedUnion<any, any>>(v
       const discriminatorValue = discriminatorEntry[1].value;
       
       // Find the option that matches this discriminator value
-      const options = schema._def.options as Map<any, z.ZodObject<any>>;
-      const matchingOption = options.get(discriminatorValue);
+      // Try each option and see which one accepts the discriminator value
+      const options = Array.from(schema._def.options);
+      let matchingOption = null;
+      
+      for (const option of options) {
+        try {
+          // Try to parse just the discriminator field with this option
+          const testResult = option.shape[discriminator].parse(discriminatorValue);
+          if (testResult === discriminatorValue) {
+            matchingOption = option;
+            break;
+          }
+        } catch {
+          // This option doesn't match, continue to next
+          continue;
+        }
+      }
       
       if (matchingOption) {
         try {
@@ -1815,7 +1864,6 @@ function coerceDiscriminatedUnion<T extends z.ZodDiscriminatedUnion<any, any>>(v
       }
     }
   }
-  */
   
   // Fallback: try all options like regular union
   const options = schema._def.options;
