@@ -23,10 +23,20 @@ const SEMANTIC_ALIASES: Record<string, string[]> = {
 export function parseBasic<T extends z.ZodType>(input: string, schema: T, options?: ParseOptions): z.infer<T> {
   const ctx = createParsingContext();
   
+  // Set default options with strategy controls
+  const defaultOptions: ParseOptions = {
+    allowAsString: true,
+    allowMarkdownJson: true,
+    allowFixes: true,
+    allowPartial: false,
+    allowMalformed: false
+  };
+  const opts = { ...defaultOptions, ...options };
+  
   // Early streaming validation for incomplete quoted strings (only for literal unions)
   if (schema instanceof z.ZodUnion) {
-    const options = schema._def.options;
-    const hasLiteralOptions = options.some((option: z.ZodType) => option instanceof z.ZodLiteral);
+    const unionOptions = schema._def.options;
+    const hasLiteralOptions = unionOptions.some((option: z.ZodType) => option instanceof z.ZodLiteral);
     if (hasLiteralOptions && isIncompleteQuotedString(input)) {
       throw new Error('Incomplete quoted string - streaming validation failure');
     }
@@ -39,10 +49,10 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
   
   // Special handling for unions containing string schemas to preserve formatting
   if (schema instanceof z.ZodUnion) {
-    const options = schema._def.options;
-    const hasStringOption = options.some((option: z.ZodType) => option instanceof z.ZodString);
-    const hasArrayOption = options.some((option: z.ZodType) => option instanceof z.ZodArray);
-    const hasObjectOption = options.some((option: z.ZodType) => option instanceof z.ZodObject);
+    const unionOptions = schema._def.options;
+    const hasStringOption = unionOptions.some((option: z.ZodType) => option instanceof z.ZodString);
+    const hasArrayOption = unionOptions.some((option: z.ZodType) => option instanceof z.ZodArray);
+    const hasObjectOption = unionOptions.some((option: z.ZodType) => option instanceof z.ZodObject);
     
     if (hasStringOption && !hasArrayOption && !hasObjectOption && input.startsWith('"') && input.endsWith('"')) {
       // Only skip JSON.parse for inputs that look like JSON-quoted strings
@@ -61,8 +71,8 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
     // Continue to other strategies
   }
   
-  // Strategy 2: Extract JSON from mixed content (for complex types)
-  if (schema instanceof z.ZodObject || schema instanceof z.ZodArray || schema instanceof z.ZodRecord) {
+  // Strategy 2: Extract JSON from mixed content (for complex types) - controlled by allowMarkdownJson
+  if (opts.allowMarkdownJson && (schema instanceof z.ZodObject || schema instanceof z.ZodArray || schema instanceof z.ZodRecord)) {
     const extractedValues = extractJsonFromText(input);
     for (const value of extractedValues) {
       try {
@@ -70,7 +80,7 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
         const result = coerceValue(value, schema, createParsingContext());
         
         // If allowPartial is enabled, check if the result might have been degraded due to missing partial data
-        if (options?.allowPartial) {
+        if (opts.allowPartial) {
           // Check for common signs of degraded results (e.g., empty arrays that should have content)
           if (schema instanceof z.ZodObject) {
             const shape = schema.shape;
@@ -92,7 +102,7 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
         return result;
       } catch (error) {
         // If regular coercion fails but allowPartial is enabled, try partial coercion
-        if (options?.allowPartial) {
+        if (opts.allowPartial) {
           try {
             return coerceValueWithPartialSupport(value, schema, ctx, input);
           } catch (partialError) {
@@ -130,20 +140,22 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
     }
   }
   
-  // Strategy 3: JSON fixing for malformed input
-  try {
-    const fixed = fixJson(input);
-    if (fixed !== input) {
-      const parsed = JSON.parse(fixed);
-      const value = createValueFromParsed(parsed);
-      return coerceValue(value, schema, ctx);
+  // Strategy 3: JSON fixing for malformed input - controlled by allowFixes
+  if (opts.allowFixes) {
+    try {
+      const fixed = fixJson(input);
+      if (fixed !== input) {
+        const parsed = JSON.parse(fixed);
+        const value = createValueFromParsed(parsed);
+        return coerceValue(value, schema, ctx);
+      }
+    } catch {
+      // Continue to other strategies
     }
-  } catch {
-    // Continue to other strategies
   }
   
-  // Strategy 4: Advanced state machine parsing for complex malformed JSON
-  if (schema instanceof z.ZodObject || schema instanceof z.ZodArray || schema instanceof z.ZodRecord) {
+  // Strategy 4: Advanced state machine parsing for complex malformed JSON - controlled by allowFixes
+  if (opts.allowFixes && (schema instanceof z.ZodObject || schema instanceof z.ZodArray || schema instanceof z.ZodRecord)) {
     try {
       const { value } = parseWithAdvancedFixing(input);
       return coerceValue(value, schema, ctx);
@@ -164,7 +176,7 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
   }
   
   // Strategy 6: Partial parsing for incomplete JSON (if allowPartial is enabled)
-  if (options?.allowPartial && (schema instanceof z.ZodObject || schema instanceof z.ZodArray || schema instanceof z.ZodRecord)) {
+  if (opts.allowPartial && (schema instanceof z.ZodObject || schema instanceof z.ZodArray || schema instanceof z.ZodRecord)) {
     try {
       return parsePartialValue(input, schema, ctx);
     } catch {
@@ -172,7 +184,11 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
     }
   }
   
-  // Strategy 7: String fallback with type coercion
+  // Strategy 7: String fallback with type coercion - controlled by allowAsString
+  if (!opts.allowAsString) {
+    throw new Error('All parsing strategies exhausted');
+  }
+  
   const stringValue = createStringValue(input);
   return coerceValue(stringValue, schema, ctx);
 }
@@ -820,15 +836,16 @@ function coerceRecordWithPartialSupport<T extends z.ZodRecord<any, any>>(value: 
 
 // Parsing context for circular reference detection
 export interface ParsingContext {
-  visitedClassValuePairs: Set<string>;
-  visitedLazySchemas?: Set<string>;
+  visitedDuringTryCast: Set<string>;
+  visitedDuringCoerce: Set<string>;
   depth: number;
   maxDepth: number;
 }
 
 export function createParsingContext(): ParsingContext {
   return {
-    visitedClassValuePairs: new Set(),
+    visitedDuringTryCast: new Set(),
+    visitedDuringCoerce: new Set(),
     depth: 0,
     maxDepth: 100
   };
@@ -1033,19 +1050,51 @@ function findAliasMatch(inputKey: string, schemaKeys: string[]): string | null {
   return null;
 }
 
+function generateCircularKey(schemaId: string, value: Value): string {
+  // Create stable hash based on schema type + value structure
+  // Avoid JSON.stringify which creates false positives
+  return `${schemaId}:${value.type}:${hashValueStructure(value)}`;
+}
+
+function hashValueStructure(value: Value): string {
+  switch (value.type) {
+    case 'object':
+      // Hash based on field names and types, not values
+      const fieldSig = value.entries
+        .map(([key, val]) => `${key}:${val.type}`)
+        .sort()
+        .join(',');
+      return `obj(${fieldSig})`;
+    case 'array':
+      // Hash based on array length and first element type
+      const firstType = value.items.length > 0 ? value.items[0].type : 'empty';
+      return `arr[${value.items.length}]:${firstType}`;
+    case 'string':
+      return `str:${value.value.length}`;
+    case 'number':
+    case 'boolean':
+    case 'null':
+      return `${value.type}:${value.value}`;
+    default:
+      return `${value.type}:unknown`;
+  }
+}
+
 function coerceObject<T extends z.ZodObject<any>>(value: Value, schema: T, ctx: ParsingContext): z.infer<T> {
   const schemaShape = schema.shape as Record<string, z.ZodType>;
   const schemaKeys = Object.keys(schemaShape);
   
   // Generate unique key for circular reference detection
-  const valueKey = JSON.stringify([schemaKeys, coerceValueGeneric(value)]);
-  if (ctx.visitedClassValuePairs.has(valueKey)) {
-    throw new Error('Circular reference detected');
+  const schemaId = schema.constructor.name;
+  const circularKey = generateCircularKey(schemaId, value);
+  
+  if (ctx.visitedDuringCoerce.has(circularKey)) {
+    throw new Error(`Circular reference detected: ${circularKey}`);
   }
   
   const newCtx = {
     ...ctx,
-    visitedClassValuePairs: new Set([...ctx.visitedClassValuePairs, valueKey]),
+    visitedDuringCoerce: new Set(ctx.visitedDuringCoerce).add(circularKey),
     depth: ctx.depth + 1
   };
   
@@ -1142,6 +1191,63 @@ function coerceObject<T extends z.ZodObject<any>>(value: Value, schema: T, ctx: 
   return schema.parse(coerceValueGeneric(value)) as z.infer<T>;
 }
 
+function recoverArrayElements(results: any[], errors: any[], schema: z.ZodArray<any>): any[] {
+  // Implement Rust array_helper.rs pick_best logic
+  const items = [];
+  
+  for (const result of results) {
+    if (result.success) {
+      // Successful parse - include it
+      items.push(result.item);
+    } else {
+      // Failed parse - attempt recovery strategies
+      const recovered = attemptElementRecovery(result.originalItem, schema.element, result.error);
+      if (recovered !== null) {
+        items.push(recovered);
+      }
+      // If recovery also fails, the item is silently dropped
+      // This preserves partial arrays while avoiding complete failures
+    }
+  }
+  
+  return items;
+}
+
+function attemptElementRecovery(originalItem: Value, elementSchema: z.ZodType, originalError: Error): any | null {
+  // Try alternative coercion strategies for failed elements
+  try {
+    // Strategy 1: If it's a union and original failed, try string fallback
+    if (elementSchema instanceof z.ZodUnion) {
+      const options = elementSchema._def.options;
+      const stringOption = options.find((opt: z.ZodType) => opt instanceof z.ZodString);
+      if (stringOption && originalItem.type !== 'string') {
+        // Convert to string and try again
+        const stringValue = createStringValue(JSON.stringify(coerceValueGeneric(originalItem)));
+        return coerceValue(stringValue, stringOption, createParsingContext());
+      }
+    }
+    
+    // Strategy 2: If element has optional/nullable wrapper, try returning null/undefined
+    if (elementSchema instanceof z.ZodOptional) {
+      return undefined;
+    }
+    if (elementSchema instanceof z.ZodNullable) {
+      return null;
+    }
+    
+    // Strategy 3: For object schemas, try partial parsing if the item has some valid fields
+    if (elementSchema instanceof z.ZodObject && originalItem.type === 'object') {
+      // This would need more sophisticated partial object coercion
+      // For now, return null to indicate recovery failed
+      return null;
+    }
+    
+    return null; // Recovery failed
+  } catch {
+    return null; // Recovery attempt also failed
+  }
+}
+
 function coerceArray<T extends z.ZodArray<any>>(value: Value, schema: T, ctx: ParsingContext): z.infer<T> {
   const newCtx = { ...ctx, depth: ctx.depth + 1 };
   
@@ -1202,19 +1308,28 @@ function coerceArray<T extends z.ZodArray<any>>(value: Value, schema: T, ctx: Pa
       }
     }
     
-    // Standard array coercion with error handling to prevent single item failures from breaking entire array
-    const items = [];
+    // Standard array coercion with error recovery to prevent data loss
+    const results = [];
+    const errors = [];
+    
+    // Collect all attempts (both successes and failures)
     for (let i = 0; i < value.items.length; i++) {
       try {
         const coercedItem = coerceValue(value.items[i], schema.element, newCtx);
-        items.push(coercedItem);
+        results.push({ success: true, item: coercedItem, index: i });
       } catch (error) {
-        // Log the error for debugging but continue processing other items
+        // Store error for recovery instead of skipping
+        results.push({ success: false, error, originalItem: value.items[i], index: i });
+        errors.push({ index: i, error, originalItem: value.items[i] });
         console.warn(`Failed to coerce array item ${i}:`, error.message);
-        // Optionally, you could push the raw item or skip it entirely
-        // For now, we'll skip failed items to prevent array processing from stopping
-        continue;
       }
+    }
+    
+    // Apply error recovery logic
+    const items = recoverArrayElements(results, errors, schema);
+    if (items.length === 0 && value.items.length > 0) {
+      // If all items failed but we had original items, this might be a schema mismatch
+      throw new Error(`All array items failed coercion. First error: ${errors[0]?.error?.message || 'Unknown error'}`);
     }
     // Try Zod validation first, fall back to bypassing if it fails due to record issues
     try {
@@ -1274,27 +1389,49 @@ function getValueHash(value: Value): string {
   }
 }
 
-function tryDirectCast(value: Value, schema: z.ZodType): {success: boolean, value?: any} {
-  // Fast-path matching without recursive coerceValue calls - only for primitive types
+function tryDirectCast(value: Value, schema: z.ZodType): {success: boolean, value?: any, score?: number} {
+  // Fast-path matching for exact type matches without expensive coercion
   try {
-    // Only match exact primitive types to avoid interfering with complex union resolution
+    // Exact primitive type matches
     if (schema instanceof z.ZodString && value.type === 'string') {
-      return {success: true, value: schema.parse(value.value)};
+      return {success: true, value: schema.parse(value.value), score: 100};
     }
     if (schema instanceof z.ZodNumber && value.type === 'number') {
-      return {success: true, value: schema.parse(value.value)};
+      return {success: true, value: schema.parse(value.value), score: 100};
     }
     if (schema instanceof z.ZodBoolean && value.type === 'boolean') {
-      return {success: true, value: schema.parse(value.value)};
+      return {success: true, value: schema.parse(value.value), score: 100};
     }
     if (schema instanceof z.ZodNull && value.type === 'null') {
-      return {success: true, value: null};
+      return {success: true, value: null, score: 100};
     }
     
-    // For complex types (arrays, objects, records), always use Phase 2 for proper scoring
-    return {success: false};
+    // Complex type compatibility checks (without full coercion)
+    if (schema instanceof z.ZodObject && value.type === 'object') {
+      // Check if the object value has compatible structure
+      const shape = schema.shape as Record<string, z.ZodType>;
+      const shapeKeys = Object.keys(shape);
+      const valueKeys = value.entries.map(([k, v]) => k);
+      
+      // If at least some fields match, this could be a good candidate
+      const matchingKeys = shapeKeys.filter(key => valueKeys.includes(key));
+      if (matchingKeys.length > 0) {
+        return {success: true, value: undefined, score: 80 + matchingKeys.length}; // Higher score for more matches
+      }
+    }
+    
+    if (schema instanceof z.ZodArray && value.type === 'array') {
+      return {success: true, value: undefined, score: 90}; // Arrays with arrays are good matches
+    }
+    
+    // Lazy schema compatibility - important for recursive structures
+    if (schema instanceof z.ZodLazy && value.type === 'object') {
+      return {success: true, value: undefined, score: 95}; // High score for lazy schemas with objects
+    }
+    
+    return {success: false, score: 0};
   } catch {
-    return {success: false};
+    return {success: false, score: 0};
   }
 }
 
@@ -1306,13 +1443,13 @@ function coerceWithVisitorOptimization<T>(
 ): T {
   // BAML-style visitor pattern prevents infinite recursion
   const visitorKey = `${cacheKey}:${ctx.depth}`;
-  if (ctx.visitedClassValuePairs.has(visitorKey)) {
+  if (ctx.visitedDuringCoerce.has(visitorKey)) {
     throw new Error('Circular reference detected in union resolution');
   }
   
   const newCtx = {
     ...ctx,
-    visitedClassValuePairs: new Set([...ctx.visitedClassValuePairs, visitorKey]),
+    visitedDuringCoerce: new Set(ctx.visitedDuringCoerce).add(visitorKey),
     depth: ctx.depth + 1
   };
   
@@ -1499,18 +1636,29 @@ function coerceUnionHybrid<T extends z.ZodUnion<any>>(
     return cached.result as z.infer<T>;
   }
   
-  // Phase 1: try_cast (BAML pattern) - Direct type matching WITHOUT recursion
+  // Phase 1: try_cast (BAML pattern) - Fast compatibility filtering
+  const phase1Results = [];
   for (const option of options) {
     const fastResult = tryDirectCast(value, option);
-    if (fastResult.success && fastResult.value !== undefined) {
-      const result = fastResult.value as z.infer<T>;
-      unionResultCache.set(cacheKey, {result, score: 100, timestamp: Date.now()});
-      return result;
+    if (fastResult.success) {
+      if (fastResult.value !== undefined) {
+        // Complete result from Phase 1 - return immediately
+        const result = fastResult.value as z.infer<T>;
+        unionResultCache.set(cacheKey, {result, score: fastResult.score || 100, timestamp: Date.now()});
+        return result;
+      } else {
+        // Partial result - candidate for Phase 2
+        phase1Results.push({ option, score: fastResult.score || 50 });
+      }
     }
   }
   
-  // Phase 2: Full coercion with visitor tracking (only if Phase 1 fails)
-  return coerceWithVisitorOptimization(value, options, ctx, cacheKey);
+  // Phase 2: Full coercion with filtered candidates (or all options if Phase 1 had no matches)
+  const candidateOptions = phase1Results.length > 0 
+    ? phase1Results.sort((a, b) => b.score - a.score).map(r => r.option) 
+    : options;
+    
+  return coerceWithVisitorOptimization(value, candidateOptions, ctx, cacheKey);
 }
 
 function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: ParsingContext): z.infer<T> {
@@ -1973,15 +2121,15 @@ function calculateUnionScore(value: Value, schema: z.ZodType, result: any): numb
         resolvedSchema = schema._def.getter();
         lazySchemaCache.set(schema, resolvedSchema);
       }
-      // Recursive call to score the resolved schema, but with slight penalty to prevent infinite recursion
+      // Recursive call to score the resolved schema without penalty
       const resolvedScore = calculateUnionScore(value, resolvedSchema as z.ZodType, result);
-      score += Math.max(resolvedScore - 5, 50); // Minimum score of 50 for valid lazy schemas
+      score += resolvedScore; // No penalty for lazy schemas - they should score based on their resolved type
     } catch {
-      // If resolution fails, give a reasonable score for object-like values
+      // If resolution fails, give a higher score for object-like values since lazy schemas are typically recursive objects
       if (value.type === 'object') {
-        score += 80; // Good match for object values
+        score += 100; // Higher score for object matches with lazy schemas
       } else {
-        score += 30; // Moderate score for other types
+        score += 50; // Better score for other types that might fit recursive patterns
       }
     }
   }

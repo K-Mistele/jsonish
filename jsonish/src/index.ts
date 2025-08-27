@@ -11,6 +11,9 @@ import { parseBasic } from './parser.js'
 export interface ParseOptions {
     allowPartial?: boolean;
     allowMalformed?: boolean;
+    allowAsString?: boolean;
+    allowMarkdownJson?: boolean;
+    allowFixes?: boolean;
 }
 
 export interface Parser {
