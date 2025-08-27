@@ -74,6 +74,37 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
   // Strategy 2: Extract JSON from mixed content (for complex types) - controlled by allowMarkdownJson
   if (opts.allowMarkdownJson && (schema instanceof z.ZodObject || schema instanceof z.ZodArray || schema instanceof z.ZodRecord)) {
     const extractedValues = extractJsonFromText(input);
+    
+    // For array schemas with multiple extracted objects (not arrays), collect ALL objects first
+    if (schema instanceof z.ZodArray && extractedValues.length > 1) {
+      // Only apply multi-object collection if we have multiple distinct objects
+      // Don't apply if we have arrays (which would be duplicate extraction artifacts)
+      const objectValues = extractedValues.filter(val => val.type === 'object');
+      
+      if (objectValues.length > 1 && objectValues.length === extractedValues.length) {
+        // All extracted values are objects - this is likely a multi-object scenario
+        // Filter objects that can be coerced to match the element schema
+        const validObjects = objectValues.filter(obj => {
+          try {
+            coerceValue(obj, schema.element, createParsingContext());
+            return true;
+          } catch {
+            return false;
+          }
+        });
+        
+        if (validObjects.length > 0) {
+          try {
+            const arrayValue = { type: 'array' as const, items: validObjects, completion: 'Complete' as const };
+            return coerceValue(arrayValue, schema, ctx);
+          } catch {
+            // Continue to individual object processing
+          }
+        }
+      }
+    }
+    
+    // For non-array schemas or array schemas with single objects, process individually
     for (const value of extractedValues) {
       try {
         // First try regular coercion
@@ -114,7 +145,7 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
       }
     }
     
-    // Fallback: For array schemas, try to collect multiple objects if no array structure found
+    // Additional fallback: For array schemas, try to collect multiple objects using extractMultipleObjects
     if (schema instanceof z.ZodArray) {
       const multipleObjects = extractMultipleObjects(input);
       if (multipleObjects.length > 1) {

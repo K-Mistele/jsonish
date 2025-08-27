@@ -347,10 +347,12 @@ function parseUnquotedString(input: string, state: ParseState): ParseResult {
     value += 'null{';
     state.position += 5;
     
-    // Continue collecting content until we find the first complete string value
+    // Continue collecting content until we find the first complete string value after a colon
     let braceCount = 1;
     let inString = false;
     let escapeNext = false;
+    let expectingValue = false; // Track if next non-whitespace should be a value
+    let stringCount = 0;
     
     while (state.position < input.length && braceCount > 0) {
       const char = input[state.position];
@@ -364,15 +366,24 @@ function parseUnquotedString(input: string, state: ParseState): ParseResult {
         inString = true;
       } else if (char === '"' && inString) {
         inString = false;
-        // Stop after the first meaningful string value
-        // This matches the expected behavior where field13 gets content up to the first string
-        state.position++; // Include the closing quote
-        break;
+        stringCount++;
+        // If we were expecting a value and this is a string, we're done
+        if (expectingValue && stringCount > 2) { // Skip first two strings (they are likely keys)
+          state.position++; // Include the closing quote
+          break;
+        }
+        expectingValue = false;
       } else if (!inString) {
         if (char === '{') {
           braceCount++;
+          expectingValue = false;
         } else if (char === '}') {
           braceCount--;
+          expectingValue = false;
+        } else if (char === ':') {
+          expectingValue = true; // Next meaningful token should be a value
+        } else if (char === ',' && braceCount === 1) {
+          expectingValue = false;
         }
       }
       
