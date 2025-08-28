@@ -25,6 +25,9 @@ export function fixJson(input: string): string {
   // Fix numbers with commas: -2,000.00 → -2000.00
   fixed = fixCommaSeparatedNumbers(fixed);
   
+  // Fix mixed quotes within strings (unescaped quotes)
+  // fixed = fixMixedQuotes(fixed); // Temporarily disabled for debugging
+  
   // Fix malformed arrays specifically
   fixed = fixArrayElements(fixed);
   
@@ -41,9 +44,10 @@ export function fixJson(input: string): string {
     // Continue with remaining fixes
   }
   
-  // Skip potentially corrupting fixes for now to test
+  // Apply additional fixes for unquoted keys and values  
+  // fixed = fixUnquotedKeys(fixed); // Temporarily disabled for debugging
+  // Keep fixComplexUnquotedValues disabled for now to avoid corruption
   // fixed = fixComplexUnquotedValues(fixed);
-  // fixed = fixUnquotedKeys(fixed);
   
   // Fix trailing commas in arrays: [1,2,3,] → [1,2,3]
   fixed = fixed.replace(/,\s*]/g, ']');
