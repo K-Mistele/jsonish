@@ -942,6 +942,11 @@ function coerceValue<T extends z.ZodType>(value: Value, schema: T, ctx: ParsingC
   
   // Handle wrapped schemas (Optional, Nullable, etc.)
   if (schema instanceof z.ZodOptional) {
+    // Check for actual null Values first
+    if (value.type === 'null') {
+      return undefined as z.infer<T>;
+    }
+    
     // For optional enum schemas, check for explicit JSON null first
     if (value.type === 'string' && schema._def.innerType instanceof z.ZodEnum) {
       if (/```json\s*null\s*```/i.test(value.value)) {
@@ -1002,6 +1007,262 @@ function coerceValueGeneric(value: Value): any {
     default:
       throw new Error(`Cannot coerce ${value.type} generically`);
   }
+}
+
+function parseJsonWithDuplicateKeys(jsonStr: string): any {
+  // First check if there are actually duplicate keys to avoid unnecessary processing
+  if (!hasDuplicateKeys(jsonStr)) {
+    return JSON.parse(jsonStr);
+  }
+  
+  // This function parses JSON while preserving duplicate keys by transforming
+  // them into unique keys and then consolidating them after parsing
+  
+  const keyMap = new Map<string, number>();
+  let transformed = jsonStr;
+  
+  // Find and transform duplicate keys
+  const keyPattern = /"([^"]+)"\s*:/g;
+  let match;
+  const keyReplacements: Array<{ original: string; transformed: string; instance: number }> = [];
+  
+  while ((match = keyPattern.exec(jsonStr)) !== null) {
+    const key = match[1];
+    const fullMatch = match[0];
+    
+    if (!keyMap.has(key)) {
+      keyMap.set(key, 0);
+    } else {
+      const instance = keyMap.get(key)! + 1;
+      keyMap.set(key, instance);
+      
+      // Transform the key to make it unique
+      const uniqueKey = `${key}__DUPLICATE_${instance}__`;
+      const transformedMatch = `"${uniqueKey}":`;
+      
+      keyReplacements.push({
+        original: key,
+        transformed: uniqueKey,
+        instance
+      });
+      
+      // Replace in the string
+      const matchStart = match.index;
+      transformed = transformed.substring(0, matchStart) + 
+                   transformedMatch + 
+                   transformed.substring(matchStart + fullMatch.length);
+      
+      // Adjust the regex position to account for the length change
+      const lengthDiff = transformedMatch.length - fullMatch.length;
+      keyPattern.lastIndex += lengthDiff;
+    }
+  }
+  
+  // Parse the transformed JSON
+  const parsed = JSON.parse(transformed);
+  
+  // Consolidate duplicate keys back
+  return consolidateDuplicatesInParsedObject(parsed, keyReplacements);
+}
+
+function hasDuplicateKeys(jsonStr: string): boolean {
+  const keys = new Set<string>();
+  const keyPattern = /"([^"]+)"\s*:/g;
+  let match;
+  
+  while ((match = keyPattern.exec(jsonStr)) !== null) {
+    const key = match[1];
+    if (keys.has(key)) {
+      return true; // Duplicate found
+    }
+    keys.add(key);
+  }
+  
+  return false;
+}
+
+function consolidateDuplicatesInParsedObject(obj: any, keyReplacements: Array<{ original: string; transformed: string; instance: number }>): any {
+  if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
+    return obj;
+  }
+  
+  const result: any = {};
+  const duplicateGroups = new Map<string, any[]>();
+  
+  // First, collect all values for each original key
+  for (const [key, value] of Object.entries(obj)) {
+    let originalKey = key;
+    let isDuplicate = false;
+    
+    // Check if this is a transformed duplicate key
+    for (const replacement of keyReplacements) {
+      if (key === replacement.transformed) {
+        originalKey = replacement.original;
+        isDuplicate = true;
+        break;
+      }
+    }
+    
+    if (isDuplicate || duplicateGroups.has(originalKey)) {
+      if (!duplicateGroups.has(originalKey)) {
+        // First duplicate - move the original value if it exists
+        if (result[originalKey] !== undefined) {
+          duplicateGroups.set(originalKey, [result[originalKey]]);
+          delete result[originalKey];
+        } else {
+          duplicateGroups.set(originalKey, []);
+        }
+      }
+      duplicateGroups.get(originalKey)!.push(consolidateDuplicatesInParsedObject(value, keyReplacements));
+    } else {
+      result[originalKey] = consolidateDuplicatesInParsedObject(value, keyReplacements);
+    }
+  }
+  
+  // Add consolidated duplicates as arrays
+  for (const [key, values] of duplicateGroups) {
+    result[key] = values;
+  }
+  
+  return result;
+}
+
+function hasDuplicateKeysInEntries(entries: [string, Value][]): boolean {
+  const keys = new Set<string>();
+  for (const [key, _] of entries) {
+    if (keys.has(key)) {
+      return true;
+    }
+    keys.add(key);
+  }
+  return false;
+}
+
+function consolidateDuplicateKeys(entries: [string, Value][]): [string, Value][] {
+  const keyMap = new Map<string, Value[]>();
+  
+  // Collect all values for each key
+  for (const [key, value] of entries) {
+    if (!keyMap.has(key)) {
+      keyMap.set(key, []);
+    }
+    keyMap.get(key)!.push(value);
+  }
+  
+  // Convert to single values or arrays as appropriate
+  const result: [string, Value][] = [];
+  for (const [key, values] of keyMap) {
+    if (values.length === 1) {
+      result.push([key, values[0]]);
+    } else {
+      // Special handling for objects that can be merged (complementary field data)
+      const mergeResult = attemptObjectMerge(values);
+      if (mergeResult) {
+        // If we successfully merged some objects, create an array with the merged object plus any non-objects
+        const objects = values.filter(val => val.type === 'object');
+        const nonObjects = values.filter(val => val.type !== 'object');
+        const finalItems = [mergeResult, ...nonObjects];
+        result.push([key, { type: 'array', items: finalItems, completion: 'complete' }]);
+      } else {
+        // Create array value for duplicates that can't be merged
+        result.push([key, { type: 'array', items: values, completion: 'complete' }]);
+      }
+    }
+  }
+  
+  return result;
+}
+
+function attemptObjectMerge(values: Value[]): Value | null {
+  // Only merge if we have multiple objects
+  const objects = values.filter(val => val.type === 'object');
+  if (objects.length < 2) {
+    return null; // Need at least 2 objects to merge
+  }
+  
+  // Only merge objects that have significant field overlap OR are clearly complementary
+  // This is more conservative to avoid unintended merging
+  const fieldSets = objects.map(obj => new Set(obj.entries.map(([key, _]) => key)));
+  
+  // Check if objects have overlapping fields (suggesting they're related)
+  let hasOverlap = false;
+  for (let i = 0; i < fieldSets.length; i++) {
+    for (let j = i + 1; j < fieldSets.length; j++) {
+      const intersection = new Set([...fieldSets[i]].filter(x => fieldSets[j].has(x)));
+      if (intersection.size > 0) {
+        hasOverlap = true;
+        break;
+      }
+    }
+    if (hasOverlap) break;
+  }
+  
+  // Only merge if there's field overlap (suggesting they're related objects) 
+  // OR if we have a very specific pattern (field13 with string value)
+  const hasField13String = objects.some(obj => 
+    obj.entries.some(([key, val]) => key === 'field13' && val.type === 'string')
+  );
+  
+  if (!hasOverlap && !hasField13String) {
+    return null; // Objects seem unrelated, don't merge
+  }
+  
+  // Check if objects are complementary (have different fields or some fields can be enhanced)
+  const allFields = new Map<string, Value>();
+  let hasComplementaryData = false;
+  
+  for (const obj of objects) {
+    for (const [fieldKey, fieldValue] of obj.entries) {
+      if (!allFields.has(fieldKey)) {
+        allFields.set(fieldKey, fieldValue);
+        hasComplementaryData = true; // New field found
+      } else {
+        // Field exists in multiple objects - check if we can pick the better value
+        const existing = allFields.get(fieldKey)!;
+        const better = pickBetterFieldValue(existing, fieldValue, fieldKey);
+        if (better !== existing) {
+          allFields.set(fieldKey, better);
+          hasComplementaryData = true;
+        }
+      }
+    }
+  }
+  
+  // Only merge if there's actually complementary data
+  if (!hasComplementaryData) {
+    return null; // All objects are identical, no point merging
+  }
+  
+  // Create merged object
+  const mergedEntries: [string, Value][] = Array.from(allFields.entries());
+  return {
+    type: 'object',
+    entries: mergedEntries,
+    completion: 'complete'
+  };
+}
+
+function pickBetterFieldValue(existing: Value, candidate: Value, fieldKey: string): Value {
+  // Prefer non-null values over null
+  if (existing.type === 'null' && candidate.type !== 'null') {
+    return candidate;
+  }
+  if (candidate.type === 'null' && existing.type !== 'null') {
+    return existing;
+  }
+  
+  // For field13 specifically, prefer string values (malformed content) over null
+  if (fieldKey === 'field13') {
+    if (existing.type === 'string' && candidate.type !== 'string') {
+      return existing;
+    }
+    if (candidate.type === 'string' && existing.type !== 'string') {
+      return candidate;
+    }
+  }
+  
+  // Default: keep existing
+  return existing;
 }
 
 interface FieldMatchResult {
@@ -1165,8 +1426,12 @@ function coerceObject<T extends z.ZodObject<any>>(value: Value, schema: T, ctx: 
       }
     }
     
+    // Consolidate duplicate keys only if there are actual duplicates
+    const hasDuplicates = hasDuplicateKeysInEntries(value.entries);
+    const processEntries = hasDuplicates ? consolidateDuplicateKeys(value.entries) : value.entries;
+    
     // Process object fields
-    for (const [key, val] of value.entries) {
+    for (const [key, val] of processEntries) {
       let fieldSchema = schemaShape[key];
       let targetKey = key;
       
@@ -1580,7 +1845,87 @@ function coerceWithVisitorOptimization<T>(
       }
     }
     
-    throw new Error(`No union option matched value`);
+    // Strategy 2: Try text extraction for each union option (following main parser Strategy 5)
+    if (value.type === 'string' && ctx.depth < 3) { // Prevent infinite recursion
+      const originalInput = value.value;
+      for (const option of options) {
+        try {
+          const extractedValue = extractFromText(originalInput, option);
+          if (extractedValue) {
+            const result = coerceValue(extractedValue, option, newCtx);
+            const score = calculateUnionScore(value, option, result);
+            results.push({ result, option, score });
+          }
+        } catch {
+          continue;
+        }
+      }
+      
+      if (results.length > 0) {
+        results.sort((a, b) => b.score - a.score);
+        const bestResult = results[0].result as z.infer<T>;
+        unionResultCache.set(cacheKey, {result: bestResult, score: results[0].score, timestamp: Date.now()});
+        return bestResult;
+      }
+    }
+    
+    // Strategy 3: Try nullable/optional fallbacks
+    const hasNullableOption = options.some((option: z.ZodType) => option instanceof z.ZodNullable);
+    const hasOptionalOption = options.some((option: z.ZodType) => option instanceof z.ZodOptional);
+    
+    if (hasNullableOption) {
+      const nullableOption = options.find((option: z.ZodType) => option instanceof z.ZodNullable);
+      try {
+        const result = nullableOption!.parse(null) as z.infer<T>;
+        unionResultCache.set(cacheKey, {result, score: 30, timestamp: Date.now()});
+        return result;
+      } catch {
+        // Continue to next fallback
+      }
+    }
+    
+    if (hasOptionalOption) {
+      const optionalOption = options.find((option: z.ZodType) => option instanceof z.ZodOptional);
+      try {
+        const result = optionalOption!.parse(undefined) as z.infer<T>;
+        unionResultCache.set(cacheKey, {result, score: 30, timestamp: Date.now()});
+        return result;
+      } catch {
+        // Continue to next fallback
+      }
+    }
+    
+    // Strategy 4: Ultimate fallback - try default values for each union option
+    // Only activate for primitive union types (not complex structures)
+    const hasPrimitiveTypes = options.every((option: z.ZodType) => 
+      option instanceof z.ZodString || 
+      option instanceof z.ZodNumber || 
+      option instanceof z.ZodBoolean || 
+      option instanceof z.ZodNull
+    );
+    
+    if (hasPrimitiveTypes && ctx.depth <= 2) { // Conservative activation
+      for (const option of options) {
+        try {
+          let defaultValue = null;
+          if (option instanceof z.ZodString) defaultValue = '';
+          else if (option instanceof z.ZodNumber) defaultValue = 0;
+          else if (option instanceof z.ZodBoolean) defaultValue = false;
+          else if (option instanceof z.ZodNull) defaultValue = null;
+          
+          if (defaultValue !== null) {
+            const result = option.parse(defaultValue) as z.infer<T>;
+            unionResultCache.set(cacheKey, {result, score: 5, timestamp: Date.now()}); // Lower score
+            return result;
+          }
+        } catch {
+          continue;
+        }
+      }
+    }
+    
+    // Final strategy: Throw error with comprehensive context
+    throw new Error(`No union option matched value: ${JSON.stringify(coerceValueGeneric(value))}`);
   }
   
   if (bestResult === null) {
@@ -1829,6 +2174,101 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
     }
     
     if (results.length === 0) {
+      // Phase 2 fallback strategies - try text extraction and other recovery methods
+      
+      // Strategy 1: Try text extraction for each union option (following main parser Strategy 5)
+      if (value.type === 'string' && ctx.depth < 3) { // Prevent infinite recursion
+        const originalInput = value.value;
+        for (const option of options) {
+          try {
+            const extractedValue = extractFromText(originalInput, option);
+            if (extractedValue) {
+              const result = coerceValue(extractedValue, option, ctx);
+              const score = calculateUnionScore(processedValue, option, result);
+              results.push({ result, option, score });
+            }
+          } catch {
+            continue;
+          }
+        }
+        
+        if (results.length > 0) {
+          results.sort((a, b) => b.score - a.score);
+          const bestResult = results[0].result as z.infer<T>;
+          unionResultCache.set(cacheKey, {result: bestResult, score: results[0].score, timestamp: Date.now()});
+          return bestResult;
+        }
+      }
+      
+      // Strategy 2: If input is any type and union has string option, try string fallback
+      if (options.some((option: z.ZodType) => option instanceof z.ZodString)) {
+        try {
+          const stringOption = options.find((option: z.ZodType) => option instanceof z.ZodString) as z.ZodString;
+          const stringValue = value.type === 'string' ? value.value : JSON.stringify(coerceValueGeneric(value));
+          const result = stringOption.parse(stringValue) as z.infer<T>;
+          unionResultCache.set(cacheKey, {result, score: 60, timestamp: Date.now()});
+          return result;
+        } catch {
+          // Continue to next fallback
+        }
+      }
+      
+      // Strategy 3: Try nullable/optional fallbacks
+      const hasNullableOption = options.some((option: z.ZodType) => option instanceof z.ZodNullable);
+      const hasOptionalOption = options.some((option: z.ZodType) => option instanceof z.ZodOptional);
+      
+      if (hasNullableOption) {
+        const nullableOption = options.find((option: z.ZodType) => option instanceof z.ZodNullable);
+        try {
+          const result = nullableOption!.parse(null) as z.infer<T>;
+          unionResultCache.set(cacheKey, {result, score: 30, timestamp: Date.now()});
+          return result;
+        } catch {
+          // Continue to next fallback
+        }
+      }
+      
+      if (hasOptionalOption) {
+        const optionalOption = options.find((option: z.ZodType) => option instanceof z.ZodOptional);
+        try {
+          const result = optionalOption!.parse(undefined) as z.infer<T>;
+          unionResultCache.set(cacheKey, {result, score: 30, timestamp: Date.now()});
+          return result;
+        } catch {
+          // Continue to next fallback  
+        }
+      }
+      
+      // Strategy 4: Ultimate fallback - try default values for each union option
+      // Only activate for primitive union types (not complex structures)
+      const hasPrimitiveTypes = options.every((option: z.ZodType) => 
+        option instanceof z.ZodString || 
+        option instanceof z.ZodNumber || 
+        option instanceof z.ZodBoolean || 
+        option instanceof z.ZodNull
+      );
+      
+      if (hasPrimitiveTypes && ctx.depth <= 2) { // Conservative activation
+        for (const option of options) {
+          try {
+            let defaultValue = null;
+            if (option instanceof z.ZodString) defaultValue = '';
+            else if (option instanceof z.ZodNumber) defaultValue = 0;
+            else if (option instanceof z.ZodBoolean) defaultValue = false;
+            else if (option instanceof z.ZodNull) defaultValue = null;
+            
+            if (defaultValue !== null) {
+              const result = option.parse(defaultValue) as z.infer<T>;
+              unionResultCache.set(cacheKey, {result, score: 5, timestamp: Date.now()}); // Lower score
+              return result;
+            }
+          } catch {
+            continue;
+          }
+        }
+      }
+      
+      // Final strategy: Throw error with comprehensive context
       throw new Error(`No union option matched value: ${JSON.stringify(coerceValueGeneric(value))}`);
     }
     

@@ -529,39 +529,3 @@ export function detectLiteralAmbiguity(text: string, literalValues: any[]): bool
   return foundLiterals.length > 1;
 }
 
-export function extractFromText(input: string, schema: z.ZodType): Value | null {
-  // Skip extraction from JSON-like strings to prevent false positives
-  if (looksLikeJson(input)) {
-    return null;
-  }
-
-  // Check for incomplete quoted strings before extraction
-  if (isIncompleteQuotedString(input)) {
-    throw new Error('Incomplete quoted string - streaming validation failure');
-  }
-
-  // Extract literals from text (add to extractFromText function)
-  if (schema instanceof z.ZodLiteral) {
-    const extractedLiteral = extractLiteralFromText(input, schema._def.values[0]);
-    if (extractedLiteral !== null) {
-      if (typeof schema._def.values[0] === 'string') {
-        return createStringValue(extractedLiteral);
-      } else if (typeof schema._def.values[0] === 'number') {
-        return createNumberValue(extractedLiteral);
-      } else if (typeof schema._def.values[0] === 'boolean') {
-        return createBooleanValue(extractedLiteral);
-      }
-    }
-  }
-  
-  // Handle enums and other extraction - delegate to existing extractEnumFromText
-  if (schema instanceof z.ZodEnum) {
-    const enumValues = schema.options as readonly string[];
-    const foundEnum = extractEnumFromText(input, enumValues);
-    if (foundEnum !== null) {
-      return createStringValue(foundEnum);
-    }
-  }
-
-  return null;
-}
