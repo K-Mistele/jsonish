@@ -24,7 +24,7 @@ type: research
 Locate the original Rust implementation and understand the existing TypeScript codebase to understand what has been implemented and what needs to be added or changed to support 10-constraint-validation, plus analyze failing tests and conduct root cause analysis for fixes.
 
 ## Summary
-The TypeScript JSONish parser has **complete structural parsing capabilities** but **lacks constraint validation integration**. The root cause of failing constraint tests is that **Zod refinements are bypassed** during type-specific coercion functions. The Rust implementation provides a sophisticated constraint system with assert/check distinction that must be mapped to Zod's refinement system. Key gaps include: union constraint-aware scoring, refinement validation integration, and block-level constraint evaluation.
+The TypeScript JSONish parser has **complete structural parsing capabilities** but **lacks constraint validation integration**. The root cause of failing constraint tests is that **Zod refinements are bypassed** during type-specific coercion functions. The solution is straightforward: use `schema.parse()` for validation in all coercion functions, with special handling for union resolution where constraint satisfaction should influence scoring rather than cause hard failures. Key gaps include: union constraint-aware scoring, refinement validation integration in coercion functions, and proper validation in array/enum coercion.
 
 ## Detailed Findings
 
@@ -45,6 +45,7 @@ Both failing tests share the same root cause: **type-specific coercion functions
 // Input: 4-item array should fail length constraint
 // Current: Returns 2-item array without length validation
 // Issue: coerceArray() falls back to `return items as z.infer<T>` (line 1852)
+// Fix: Use schema.parse(items) to validate length constraints
 ```
 
 **Test 2: Enum Block Constraint (Line 198)**
@@ -53,50 +54,30 @@ Both failing tests share the same root cause: **type-specific coercion functions
 // Input: "THREE" should fail refinement
 // Current: Returns "THREE" without refinement check
 // Issue: coerceEnum() never validates refinements (lines 2570-2592)
+// Fix: Use schema.parse(enumValue) to validate refinements
 ```
 
-### **Rust Implementation Architecture Analysis**
+### **Rust Implementation Architecture Analysis** *(Reference Only)*
 
-#### **Constraint System Foundation**
-*File: `baml/engine/baml-lib/baml-types/src/constraint.rs`*
+The Rust implementation provides useful architectural patterns, but we don't need to replicate the assert/check distinction since Zod and TypeScript don't support this complexity, and it's not a requirement for our use case.
 
-**Core Structure:**
-```rust
-pub struct Constraint {
-    pub level: ConstraintLevel,      // Assert vs Check
-    pub expression: JinjaExpression, // Validation logic
-    pub label: Option<String>,       // Error message
-}
-
-pub enum ConstraintLevel {
-    Check,   // Soft failures (warnings, scoring penalties)
-    Assert,  // Hard failures (parsing failure)
-}
-```
-
-#### **Assert vs Check Distinction**
-*Key behavioral differences in Rust implementation:*
-
-- **`@assert`**: Hard failures causing `try_cast()` → `None`, `coerce()` → `Err(ParsingError)`
-- **`@check`**: Soft failures recorded as `Flag::ConstraintResults` with scoring impact
-- **Union Resolution**: Asserts block variant selection, checks influence scoring via penalty system
-
-#### **Constraint Evaluation Flow**
-*File: `jsonish/src/deserializer/coercer/mod.rs:302-313`*
-
-**Evaluation Pipeline:**
-1. **Field-Level**: Applied during individual field parsing via TypeCoercer trait
-2. **Block-Level**: Applied after object construction via `apply_constraints()`  
-3. **Union Resolution**: Constraints influence scoring and selection through `pick_best()`
-4. **Error Propagation**: Assert failures propagate as `ParsingError`, checks as scoring flags
-
-#### **Union Constraint Integration**
+#### **Key Insights from Rust Implementation**
 *File: `coerce_union.rs`*
 
-**Process:**
-- `try_cast_union()` - Uses `try_cast()`, filters failed asserts
-- `coerce_union()` - Uses `coerce()`, selects best via constraint-aware scoring
-- `pick_best()` - Sophisticated scoring considering constraint flags (0 penalty for satisfied constraints)
+**Union Constraint Integration Pattern:**
+- Constraint satisfaction influences union variant scoring and selection
+- Failed constraints affect scoring but don't immediately eliminate options
+- Best variant selection considers both type compatibility and constraint satisfaction
+- This provides the foundation for our constraint-aware union resolution
+
+#### **Constraint Evaluation Approach**
+*File: `jsonish/src/deserializer/coercer/mod.rs:302-313`*
+
+**Relevant Patterns:**
+1. **Field-Level Validation**: Constraints applied during individual field coercion
+2. **Block-Level Validation**: Object/array-level constraints applied after construction  
+3. **Union Resolution**: Constraint satisfaction influences variant selection through scoring
+4. **Flexible Error Handling**: Constraint failures can influence selection without causing immediate failure
 
 ### **TypeScript Implementation Gaps**
 
@@ -110,18 +91,15 @@ pub enum ConstraintLevel {
 **Issue**: Zod validation occurs after union resolution and coercion completion
 **Problem**: Union selection happens without constraint awareness
 
-#### **3. Type-Specific Bypass Pattern**
-**Critical Locations:**
-- `coerceArray()` lines 1848-1855, 1862-1869 - Bypasses validation
-- `coerceEnum()` lines 2570-2592 - Never validates refinements  
-- `coerceObject()` fallback patterns - Inconsistent validation
-- Union wrapper line 1816 - Bypasses validation
+#### **3. Type-Specific Validation Bypass Pattern**
+**Critical Locations Needing Fixes:**
+- `coerceArray()` lines 1848-1855, 1862-1869 - **Must use `schema.parse(items)` to validate length constraints**
+- `coerceEnum()` lines 2570-2592 - **Must use `schema.parse(enumValue)` to validate refinements**  
+- `coerceObject()` fallback patterns - Should consistently validate with `schema.parse()`
+- Union wrapper line 1816 - Should validate final selected result
 
-#### **4. Missing Infrastructure**
-**Constraint Evaluation Engine**: No system to run Zod refinements during parsing
-**Union Constraint Resolution**: No logic for constraint conflicts in unions
-**Block-Level Validation**: No object-level refinement evaluation after construction
-**Error Integration**: Generic "No union option matched" vs constraint-specific messages
+#### **4. Union Constraint Resolution Gap**
+**Missing Constraint-Aware Union Scoring**: Union resolution needs to consider constraint satisfaction during variant selection, where constraint failures influence scoring rather than causing immediate hard failures (except in final validation).
 
 ## Code References
 
@@ -173,10 +151,10 @@ pub enum ConstraintLevel {
 - **Template Expression System**: Flexible constraint definition via Jinja templates
 
 ### **Required TypeScript Adaptations**
-- **Map Assert → Error**: Rust `@assert` maps to Zod refinement throwing errors
-- **Map Check → Warning**: Rust `@check` maps to custom validation recording results without failing
-- **Constraint-Aware Union Scoring**: Integrate refinement satisfaction into union option scoring
-- **Early Validation Integration**: Move constraint checking earlier in pipeline before union resolution
+- **Standard Zod Behavior**: All refinements are hard failures (we don't need assert/check distinction)
+- **Union Constraint Scoring**: Integrate refinement satisfaction into union option scoring (constraint failures influence scoring, not immediate failure)
+- **Validation Integration**: Use `schema.parse()` consistently in all coercion functions
+- **Constraint-Aware Union Resolution**: Consider constraint satisfaction during union variant selection
 
 ### **Performance Considerations**
 - **Lazy Evaluation**: Constraints evaluated only when necessary during coercion
@@ -186,20 +164,20 @@ pub enum ConstraintLevel {
 
 ## Recommended Implementation Strategy
 
-### **Phase 1: Core Refinement Integration**
-1. **Fix Type-Specific Bypasses**: Ensure all coercion functions call `schema.parse()` on final results
-2. **Union Constraint Scoring**: Enhance `calculateUnionScoreOptimized()` with refinement satisfaction
-3. **Early Constraint Evaluation**: Add constraint checking in `coerceValue()` before type coercion
+### **Phase 1: Fix Validation Bypasses (Immediate)**
+1. **`coerceArray()` Fix**: Replace `return items as z.infer<T>` with `return schema.parse(items)` to validate length constraints
+2. **`coerceEnum()` Fix**: Add `return schema.parse(enumValue)` to validate refinements  
+3. **Consistent Validation**: Ensure all type-specific coercion functions use `schema.parse()` for final validation
 
-### **Phase 2: Advanced Constraint Features**  
-1. **Block-Level Validation**: Object/array-level constraint evaluation after construction
-2. **Constraint Error Recovery**: Intelligent fallback for constraint failures
-3. **Union Conflict Resolution**: Handle cases where multiple variants partially satisfy constraints
+### **Phase 2: Union Constraint-Aware Scoring**  
+1. **Union Scoring Enhancement**: Modify `calculateUnionScoreOptimized()` to consider constraint satisfaction
+2. **Constraint-Aware Selection**: During union resolution, constraint failures should influence scoring rather than cause immediate failure
+3. **Best Match Selection**: Choose union variant that best satisfies both type and constraint requirements
 
 ### **Phase 3: Performance and Polish**
-1. **Constraint Caching**: Avoid re-evaluating same constraints  
-2. **Discriminated Union Detection**: Optimize common union patterns
-3. **Enhanced Error Messages**: Constraint-specific error reporting
+1. **Error Handling**: Proper constraint violation error messages
+2. **Performance**: Ensure constraint evaluation doesn't significantly impact parsing speed
+3. **Edge Cases**: Handle complex constraint scenarios gracefully
 
 ## Success Criteria
 
@@ -215,10 +193,17 @@ pub enum ConstraintLevel {
 - Block-level constraints evaluated after object construction  
 - Performance impact minimal (<10% parsing overhead)
 
-### **Behavioral Compatibility**
-- Maintain exact behavioral parity with Rust implementation constraint handling
-- Zod refinement errors properly propagated
-- Union ambiguity resolution consistent with BAML patterns
-- Error messages actionable and informative
+### **Behavioral Requirements**
+- **Standard Zod Behavior**: All refinements are hard failures (no need for assert/check distinction)
+- **Union Constraint Scoring**: Constraint satisfaction influences union variant selection 
+- **Proper Validation**: All coercion functions must use `schema.parse()` for refinement validation
+- **Error Propagation**: Zod refinement errors properly propagated with clear messages
 
-The core insight is that **constraint validation must be integrated earlier in the parsing pipeline**, particularly during union resolution and type coercion, rather than being deferred to final validation steps that occur too late to influence parsing decisions.
+## Key Implementation Insights
+
+**The solution is straightforward**: 
+1. **Fix validation bypasses** by using `schema.parse()` in all coercion functions (especially `coerceArray` and `coerceEnum`)
+2. **Enhance union scoring** to consider constraint satisfaction during variant selection
+3. **No complex assert/check distinction needed** - standard Zod refinement behavior is sufficient
+
+**Constraint validation should be integrated into the coercion pipeline** where it can influence union resolution decisions, rather than being deferred to final validation steps that occur too late to affect parsing outcomes.
