@@ -33,6 +33,7 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
   };
   const opts = { ...defaultOptions, ...options };
   
+  
   // Early streaming validation for incomplete quoted strings (only for literal unions)
   if (schema instanceof z.ZodUnion) {
     const unionOptions = schema._def.options;
@@ -74,6 +75,50 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
   // Strategy 2: Extract JSON from mixed content (for complex types) - controlled by allowMarkdownJson
   if (opts.allowMarkdownJson && (schema instanceof z.ZodObject || schema instanceof z.ZodArray || schema instanceof z.ZodRecord)) {
     const extractedValues = extractJsonFromText(input);
+    
+    // For partial parsing with object schemas, check for incomplete arrays before coercion
+    if (opts.allowPartial && schema instanceof z.ZodObject) {
+      const shape = schema.shape;
+      const incompleteArrayResult: Record<string, any> = {};
+      let hasIncompleteArrays = false;
+      
+      // Check each field for incomplete arrays
+      for (const [key, fieldSchema] of Object.entries(shape)) {
+        if (fieldSchema instanceof z.ZodArray) {
+          const isIncomplete = hasIncompleteArrayElementsForField(input, key);
+          if (isIncomplete) {
+            hasIncompleteArrays = true;
+            incompleteArrayResult[key] = []; // Set empty array for incomplete fields
+          }
+        }
+      }
+      
+      
+      // If we found incomplete arrays, fill in other fields and return partial result
+      if (hasIncompleteArrays) {
+        for (const [key, fieldSchema] of Object.entries(shape)) {
+          if (!(key in incompleteArrayResult)) {
+            // Try to extract the field value from extracted values
+            let fieldValue = getDefaultValue(fieldSchema as z.ZodType);
+            for (const value of extractedValues) {
+              if (value.type === 'object') {
+                const valueEntry = value.entries.find(([k, v]) => k === key);
+                if (valueEntry) {
+                  try {
+                    fieldValue = coerceValue(valueEntry[1], fieldSchema as z.ZodType, ctx);
+                    break;
+                  } catch {
+                    // Continue trying other extracted values
+                  }
+                }
+              }
+            }
+            incompleteArrayResult[key] = fieldValue;
+          }
+        }
+        return incompleteArrayResult;
+      }
+    }
     
     // For array schemas with multiple extracted objects (not arrays), collect ALL objects first
     if (schema instanceof z.ZodArray && extractedValues.length > 1) {
@@ -285,6 +330,50 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
   if (opts.allowFixes && (schema instanceof z.ZodObject || schema instanceof z.ZodArray || schema instanceof z.ZodRecord)) {
     try {
       const { value } = parseWithAdvancedFixing(input);
+      
+      // For partial parsing with object schemas, check for incomplete arrays before coercion
+      if (opts.allowPartial && schema instanceof z.ZodObject) {
+        const shape = schema.shape;
+        const incompleteArrayResult: Record<string, any> = {};
+        let hasIncompleteArrays = false;
+        
+        // Check each field for incomplete arrays
+        for (const [key, fieldSchema] of Object.entries(shape)) {
+          if (fieldSchema instanceof z.ZodArray) {
+            const isIncomplete = hasIncompleteArrayElementsForField(input, key);
+            if (isIncomplete) {
+              hasIncompleteArrays = true;
+              incompleteArrayResult[key] = []; // Set empty array for incomplete fields
+            }
+          }
+        }
+        
+        
+        // If we found incomplete arrays, fill in other fields and return partial result
+        if (hasIncompleteArrays) {
+          for (const [key, fieldSchema] of Object.entries(shape)) {
+            if (!(key in incompleteArrayResult)) {
+              // Try to extract the field value from the parsed value object
+              let fieldValue = getDefaultValue(fieldSchema as z.ZodType);
+              if (value.type === 'object') {
+                const valueEntry = value.entries.find(([k, v]) => k === key);
+                if (valueEntry) {
+                  try {
+                    // Try to coerce the individual field
+                    fieldValue = coerceValue(valueEntry[1], fieldSchema as z.ZodType, ctx);
+                  } catch {
+                    // If field coercion fails, use default
+                    fieldValue = getDefaultValue(fieldSchema as z.ZodType);
+                  }
+                }
+              }
+              incompleteArrayResult[key] = fieldValue;
+            }
+          }
+          return incompleteArrayResult;
+        }
+      }
+      
       return coerceValue(value, schema, ctx);
     } catch {
       // Continue to other strategies
@@ -1056,6 +1145,10 @@ function coerceValue<T extends z.ZodType>(value: Value, schema: T, ctx: ParsingC
   if (schema instanceof z.ZodOptional) {
     // Check for actual null Values first
     if (value.type === 'null') {
+      // Check if inner type is ZodNullable, delegate to it to handle null properly
+      if (schema._def.innerType instanceof z.ZodNullable) {
+        return coerceValue(value, schema._def.innerType, ctx) as z.infer<T>;
+      }
       return undefined as z.infer<T>;
     }
     
