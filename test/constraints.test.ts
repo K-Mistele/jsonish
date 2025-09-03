@@ -107,12 +107,20 @@ describe("Constraints", () => {
 			expect(() => parser.parse(input, EitherSchema)).toThrow();
 		});
 
-		test("should fail on list length assert", () => {
+		test("should drop invalid union items and parse remaining valid items", () => {
 			const input =
 				'{"bar": 1, "things":[{"bar": 25}, {"bar": 35}, {"bar": 15}, {"bar": 15}]}';
 
-			// List is too long (4 items, max is 3)
-			expect(() => parser.parse(input, EitherSchema)).toThrow();
+			// After cache fix: invalid union items (bar: 15) don't match either constraint (< 10 OR > 20)
+			// So they are dropped, leaving only 2 valid items which passes length constraint (< 4)
+			const result = parser.parse(input, EitherSchema);
+			
+			expect(result.bar).toEqual({ bar: 1 }); // Thing1 selected (bar < 10)
+			expect(result.things).toHaveLength(2); // Only valid union items remain
+			expect(result.things).toEqual([
+				{ bar: 25 }, // Thing2 selected (bar > 20)
+				{ bar: 35 }  // Thing2 selected (bar > 20)
+			]);
 		});
 	});
 
