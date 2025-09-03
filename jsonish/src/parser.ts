@@ -2678,30 +2678,40 @@ function coerceDiscriminatedUnion<T extends z.ZodDiscriminatedUnion<any, any>>(v
 function coerceEnum<T extends z.ZodEnum<any>>(value: Value, schema: T): z.infer<T> {
   const enumValues = schema.options as readonly string[];
   
+  // Helper function to validate constraints on an enum value
+  const validateEnumConstraints = (enumValue: string): string => {
+    // Apply refinement checks if present
+    if (schema._def.checks && schema._def.checks.length > 0) {
+      // Use schema.parse() only to apply refinements, but we know it's a valid enum
+      return schema.parse(enumValue) as z.infer<T>;
+    }
+    return enumValue;
+  };
+  
   if (value.type === 'string') {
     // Try direct match first
     const directMatch = enumValues.find(enumVal => enumVal === value.value);
     if (directMatch) {
-      return directMatch as z.infer<T>;
+      return validateEnumConstraints(directMatch) as z.infer<T>;
     }
     
     // Remove quotes if present
     const unquoted = value.value.replace(/^["']|["']$/g, '');
     const unquotedMatch = enumValues.find(enumVal => enumVal === unquoted);
     if (unquotedMatch) {
-      return unquotedMatch as z.infer<T>;
+      return validateEnumConstraints(unquotedMatch) as z.infer<T>;
     }
     
     // Try case-insensitive match
     const caseMatches = enumValues.filter(enumVal => enumVal.toLowerCase() === unquoted.toLowerCase());
     if (caseMatches.length === 1) {
-      return caseMatches[0] as z.infer<T>;
+      return validateEnumConstraints(caseMatches[0]) as z.infer<T>;
     }
     
     // Extract from text with extra content (like "ONE: description" or "**one**")
     const extractedEnum = extractEnumFromText(value.value, enumValues);
     if (extractedEnum) {
-      return extractedEnum as z.infer<T>;
+      return validateEnumConstraints(extractedEnum) as z.infer<T>;
     }
     
     throw new Error(`No enum value matches: ${value.value}`);
