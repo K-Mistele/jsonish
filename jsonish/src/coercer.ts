@@ -47,6 +47,7 @@ export function coerceToNumber(value: Value, schema: z.ZodNumber): number {
 }
 
 export function coerceToBoolean(value: Value, schema: z.ZodBoolean): boolean {
+  
   switch (value.type) {
     case 'boolean':
       return value.value;

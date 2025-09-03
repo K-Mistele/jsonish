@@ -6,12 +6,7 @@ import { extractJsonFromText, extractMultipleObjects } from './extractors.js';
 import type { ParseOptions } from './index.js';
 
 // Global caches for performance optimization (inspired by BAML's approach)
-const unionResultCache = new Map<string, {result: any, score: number, timestamp: number}>();
 const lazySchemaCache = new WeakMap<z.ZodLazy<any>, z.ZodType>();
-const scoreCache = new Map<string, number>();
-
-// Recursion protection for union resolution
-const recursionStack = new Map<string, number>(); // key -> depth count
 
 // Semantic alias mappings for field names
 const SEMANTIC_ALIASES: Record<string, string[]> = {
@@ -65,16 +60,25 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
   
   // Strategy 1: Standard JSON parsing
   try {
+    // console.log(`[DEBUG] Attempting JSON.parse on input (first 200 chars):`, input.substring(0, 200));
     const parsed = JSON.parse(input);
+    // Debug logging for parsed structure (disabled)
+    // console.log(`[DEBUG] JSON.parse succeeded:`, JSON.stringify(parsed, null, 2).substring(0, 500));
     const value = createValueFromParsed(parsed);
     return coerceValue(value, schema, ctx);
-  } catch {
+  } catch (e) {
+    // console.log(`[DEBUG] JSON.parse failed:`, e.message);
     // Continue to other strategies
   }
   
   // Strategy 2: Extract JSON from mixed content (for complex types) - controlled by allowMarkdownJson
   if (opts.allowMarkdownJson && (schema instanceof z.ZodObject || schema instanceof z.ZodArray || schema instanceof z.ZodRecord)) {
     const extractedValues = extractJsonFromText(input);
+    // Debug logging for extracted values (disabled)
+    // if (extractedValues.length > 0) {
+    //   console.log(`[DEBUG] Strategy 2: Extracted ${extractedValues.length} values from mixed content`);
+    //   console.log(`[DEBUG] First extracted value:`, JSON.stringify(extractedValues[0], null, 2));
+    // }
     
     // For partial parsing with object schemas, check for incomplete arrays before coercion
     if (opts.allowPartial && schema instanceof z.ZodObject) {
@@ -131,7 +135,7 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
         // Filter objects that can be coerced to match the element schema
         const validObjects = objectValues.filter(obj => {
           try {
-            coerceValue(obj, schema.element, createParsingContext());
+            coerceValue(obj, schema.element, ctx);
             return true;
           } catch {
             return false;
@@ -153,7 +157,9 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
     for (const value of extractedValues) {
       try {
         // First try regular coercion
-        const result = coerceValue(value, schema, createParsingContext());
+        // Debug: Log the extracted value structure (disabled)
+        // console.log(`[DEBUG] Extracted value type:`, value.type, 'First few entries:', value.type === 'object' ? value.entries.slice(0, 2).map(([k,v]) => `${k}: ${v.type} = ${v.value}`): '');
+        const result = coerceValue(value, schema, ctx);
         
         // If allowPartial is enabled, check if the result might have been degraded due to missing partial data
         if (opts.allowPartial) {
@@ -245,7 +251,7 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
                     if (valueEntry) {
                       try {
                         // Try to coerce the individual field
-                        fieldValue = coerceValue(valueEntry[1], fieldSchema as z.ZodType, createParsingContext());
+                        fieldValue = coerceValue(valueEntry[1], fieldSchema as z.ZodType, ctx);
                       } catch {
                         // If field coercion fails, use default
                         fieldValue = null;
@@ -293,7 +299,7 @@ export function parseBasic<T extends z.ZodType>(input: string, schema: T, option
         // Filter objects that can be coerced to match the element schema
         const validObjects = multipleObjects.filter(obj => {
           try {
-            coerceValue(obj, schema.element, createParsingContext());
+            coerceValue(obj, schema.element, ctx);
             return true;
           } catch {
             return false;
@@ -1072,6 +1078,10 @@ export interface ParsingContext {
   visitedDuringCoerce: Set<string>;
   depth: number;
   maxDepth: number;
+  // Per-session caches to prevent cross-session contamination
+  unionResultCache: Map<string, {result: any, score: number, timestamp: number}>;
+  scoreCache: Map<string, number>;
+  recursionStack: Map<string, number>;
 }
 
 export function createParsingContext(): ParsingContext {
@@ -1079,20 +1089,23 @@ export function createParsingContext(): ParsingContext {
     visitedDuringTryCast: new Set(),
     visitedDuringCoerce: new Set(),
     depth: 0,
-    maxDepth: 100
+    maxDepth: 100,
+    // Create fresh caches for each parsing session
+    unionResultCache: new Map(),
+    scoreCache: new Map(),
+    recursionStack: new Map()
   };
 }
 
 function coerceValue<T extends z.ZodType>(value: Value, schema: T, ctx: ParsingContext = createParsingContext()): z.infer<T> {
   // Handle z.lazy() schemas for recursive types
   if (schema instanceof z.ZodLazy) {
-    // Disable lazy schema caching for debugging
-    // let resolvedSchema = lazySchemaCache.get(schema);
-    // if (!resolvedSchema) {
-    //   resolvedSchema = schema._def.getter();
-    //   lazySchemaCache.set(schema, resolvedSchema);
-    // }
-    const resolvedSchema = schema._def.getter();
+    // Re-enable lazy schema caching to ensure consistent schema instances
+    let resolvedSchema = lazySchemaCache.get(schema);
+    if (!resolvedSchema) {
+      resolvedSchema = schema._def.getter();
+      lazySchemaCache.set(schema, resolvedSchema);
+    }
     return coerceValue(value, resolvedSchema as z.ZodType, ctx) as z.infer<T>;
   }
   
@@ -1106,6 +1119,10 @@ function coerceValue<T extends z.ZodType>(value: Value, schema: T, ctx: ParsingC
   }
   
   if (schema instanceof z.ZodBoolean) {
+    // Debug logging for boolean coercion (disabled)
+    // if (value.type === 'number' && (value.value === 1 || value.value === 2)) {
+    //   console.log(`[DEBUG] COERCING number ${value.value} to boolean!`);
+    // }
     return coerceToBoolean(value, schema) as z.infer<T>;
   }
   
@@ -1635,6 +1652,13 @@ function coerceObject<T extends z.ZodObject<any>>(value: Value, schema: T, ctx: 
     const hasDuplicates = hasDuplicateKeysInEntries(value.entries);
     const processEntries = hasDuplicates ? consolidateDuplicateKeys(value.entries) : value.entries;
     
+    // Debug: Log all object entries and recursion context (disabled)
+    // if (processEntries.some(([k, v]) => v.type === 'number' && (v.value === 1 || v.value === 2))) {
+    //   console.log(`[OBJECT DEBUG] Processing object with entries:`, processEntries.map(([k, v]) => `${k}: ${v.type}(${v.value})`), `depth: ${newCtx.depth}`);
+    // } else if (processEntries.some(([k, v]) => k === 'rec_two' && v.type === 'null')) {
+    //   console.log(`[OBJECT DEBUG] Processing object with rec_two as null:`, processEntries.map(([k, v]) => `${k}: ${v.type}(${v.value})`), `depth: ${newCtx.depth}`);
+    // }
+    
     // Process object fields
     for (const [key, val] of processEntries) {
       let fieldSchema = schemaShape[key];
@@ -1651,7 +1675,15 @@ function coerceObject<T extends z.ZodObject<any>>(value: Value, schema: T, ctx: 
       
       // If we found a matching schema, use it
       if (fieldSchema) {
+        // Debug logging for object field processing (disabled)
+        // if (val.type === 'number' && (val.value === 1 || val.value === 2)) {
+        //   console.log(`[OBJECT DEBUG] Processing field "${targetKey}" with value ${val.value}, fieldSchema:`, fieldSchema.constructor.name);
+        // }
         obj[targetKey] = coerceValue(val, fieldSchema, newCtx);
+        // Debug logging for result (disabled)
+        // if (val.type === 'number' && (val.value === 1 || val.value === 2)) {
+        //   console.log(`[OBJECT DEBUG] Field "${targetKey}" processed: ${val.value} -> ${obj[targetKey]}`);
+        // }
       }
     }
     
@@ -1735,7 +1767,7 @@ function attemptElementRecovery(originalItem: Value, elementSchema: z.ZodType, o
       if (stringOption && originalItem.type !== 'string') {
         // Convert to string and try again
         const stringValue = createStringValue(JSON.stringify(coerceValueGeneric(originalItem)));
-        return coerceValue(stringValue, stringOption, createParsingContext());
+        return coerceValue(stringValue, stringOption, ctx);
       }
     }
     
@@ -1870,9 +1902,44 @@ function coerceArray<T extends z.ZodArray<any>>(value: Value, schema: T, ctx: Pa
 }
 
 // Helper functions for hybrid BAML-TypeScript union resolution approach
-function createEfficientCacheKey(value: Value, schema: z.ZodType): string {
+function generateSchemaFingerprint(schema: z.ZodType): string {
+  // Generate unique fingerprints for different schemas to prevent cache collisions
+  if (schema instanceof z.ZodUnion) {
+    // For unions, create a fingerprint based on the types, order, and count of options
+    const optionFingerprints = schema._def.options.map((option: z.ZodType, index: number) => {
+      let fingerprint = '';
+      if (option instanceof z.ZodLazy) {
+        fingerprint = 'lazy'; // Recursive schemas get a generic identifier
+      } else if (option instanceof z.ZodObject) {
+        const fieldNames = Object.keys(option._def.shape || {}).sort();
+        fingerprint = `obj[${fieldNames.join(',')}]`;
+      } else {
+        fingerprint = option.constructor.name + (option._def?.typeName || '');
+      }
+      return `${index}:${fingerprint}`;
+    });
+    return `union[${schema._def.options.length}]:${optionFingerprints.join('|')}`;
+  } else if (schema instanceof z.ZodLazy) {
+    return 'lazy';
+  } else if (schema instanceof z.ZodObject) {
+    // For objects, include field names to distinguish different object shapes
+    const fieldNames = Object.keys(schema._def.shape || {}).sort();
+    return `obj:${fieldNames.join(',')}`;
+  } else {
+    return schema.constructor.name + (schema._def?.typeName || '');
+  }
+}
+
+function createEfficientCacheKey(value: Value, schema: z.ZodType, ctx?: ParsingContext): string {
   // Fast key generation without expensive JSON.stringify
-  return `${schema.constructor.name}:${getValueHash(value)}`;
+  const schemaFingerprint = generateSchemaFingerprint(schema);
+  // Include a unique identifier for the specific schema instance to prevent cache collisions
+  // Use a hash of the schema object reference for uniqueness
+  const schemaId = (schema as any).__cache_id__ || ((schema as any).__cache_id__ = `id${Object.keys((schema as any)._def || {}).join('')}${Math.random().toString(36).substring(2, 8)}`);
+  // Add recursion context to prevent cross-depth contamination
+  const recursionDepth = ctx ? ctx.depth : 0;
+  const recursionStackSize = ctx ? ctx.recursionStack.size : 0;
+  return `${schema.constructor.name}:${schemaFingerprint}:${schemaId}:depth${recursionDepth}:stack${recursionStackSize}:${getValueHash(value)}`;
 }
 
 function getValueHash(value: Value): string {
@@ -2017,12 +2084,12 @@ function coerceWithVisitorOptimization<T>(
       
       // Controlled recursion with visitor tracking
       const result = coerceValue(processedValue, option, newCtx);
-      const score = calculateUnionScoreOptimized(value, option, result);
+      const score = calculateUnionScoreOptimized(value, option, result, ctx);
       results.push({ result, option, score });
       
       // Early termination for perfect matches (TypeScript optimization)
       if (score >= 100) {
-        unionResultCache.set(cacheKey, {result, score, timestamp: Date.now()});
+        ctx.unionResultCache.set(cacheKey, {result, score, timestamp: Date.now()});
         return result as T;
       }
       
@@ -2043,7 +2110,7 @@ function coerceWithVisitorOptimization<T>(
         const stringOption = options.find((option: z.ZodType) => option instanceof z.ZodString) as z.ZodString;
         const stringValue = JSON.stringify(coerceValueGeneric(value));
         const result = stringOption.parse(stringValue) as T;
-        unionResultCache.set(cacheKey, {result, score: 70, timestamp: Date.now()});
+        ctx.unionResultCache.set(cacheKey, {result, score: 70, timestamp: Date.now()});
         return result;
       } catch {
         // Continue to next fallback
@@ -2069,7 +2136,7 @@ function coerceWithVisitorOptimization<T>(
       if (results.length > 0) {
         results.sort((a, b) => b.score - a.score);
         const bestResult = results[0].result as z.infer<T>;
-        unionResultCache.set(cacheKey, {result: bestResult, score: results[0].score, timestamp: Date.now()});
+        ctx.unionResultCache.set(cacheKey, {result: bestResult, score: results[0].score, timestamp: Date.now()});
         return bestResult;
       }
     }
@@ -2082,7 +2149,7 @@ function coerceWithVisitorOptimization<T>(
       const nullableOption = options.find((option: z.ZodType) => option instanceof z.ZodNullable);
       try {
         const result = nullableOption!.parse(null) as z.infer<T>;
-        unionResultCache.set(cacheKey, {result, score: 30, timestamp: Date.now()});
+        ctx.unionResultCache.set(cacheKey, {result, score: 30, timestamp: Date.now()});
         return result;
       } catch {
         // Continue to next fallback
@@ -2093,7 +2160,7 @@ function coerceWithVisitorOptimization<T>(
       const optionalOption = options.find((option: z.ZodType) => option instanceof z.ZodOptional);
       try {
         const result = optionalOption!.parse(undefined) as z.infer<T>;
-        unionResultCache.set(cacheKey, {result, score: 30, timestamp: Date.now()});
+        ctx.unionResultCache.set(cacheKey, {result, score: 30, timestamp: Date.now()});
         return result;
       } catch {
         // Continue to next fallback
@@ -2120,7 +2187,7 @@ function coerceWithVisitorOptimization<T>(
           
           if (defaultValue !== null) {
             const result = option.parse(defaultValue) as z.infer<T>;
-            unionResultCache.set(cacheKey, {result, score: 5, timestamp: Date.now()}); // Lower score
+            ctx.unionResultCache.set(cacheKey, {result, score: 5, timestamp: Date.now()}); // Lower score
             return result;
           }
         } catch {
@@ -2140,15 +2207,15 @@ function coerceWithVisitorOptimization<T>(
     bestScore = results[0].score;
   }
   
-  unionResultCache.set(cacheKey, {result: bestResult, score: bestScore, timestamp: Date.now()});
+  ctx.unionResultCache.set(cacheKey, {result: bestResult, score: bestScore, timestamp: Date.now()});
   return bestResult as T;
 }
 
-function calculateUnionScoreOptimized(value: Value, schema: z.ZodType, result: any): number {
-  const scoreKey = `${getValueHash(value)}:${schema.constructor.name}`;
+function calculateUnionScoreOptimized(value: Value, schema: z.ZodType, result: any, ctx: ParsingContext): number {
+  const scoreKey = `${getValueHash(value)}:${generateSchemaFingerprint(schema)}`;
   
-  if (scoreCache.has(scoreKey)) {
-    return scoreCache.get(scoreKey)!;
+  if (ctx.scoreCache.has(scoreKey)) {
+    return ctx.scoreCache.get(scoreKey)!;
   }
   
   let score = 0;
@@ -2213,7 +2280,7 @@ function calculateUnionScoreOptimized(value: Value, schema: z.ZodType, result: a
     score = 50; // Default score for other schema types
   }
   
-  scoreCache.set(scoreKey, score);
+  ctx.scoreCache.set(scoreKey, score);
   return score;
 }
 
@@ -2223,10 +2290,10 @@ function coerceUnionHybrid<T extends z.ZodUnion<any>>(
   ctx: ParsingContext
 ): z.infer<T> {
   const options = schema._def.options;
-  const cacheKey = createEfficientCacheKey(value, schema);
+  const cacheKey = createEfficientCacheKey(value, schema, ctx);
   
   // Cache hit - TypeScript optimization  
-  const cached = unionResultCache.get(cacheKey);
+  const cached = ctx.unionResultCache.get(cacheKey);
   if (cached && (Date.now() - cached.timestamp) < 10000) { // 10s cache TTL
     return cached.result as z.infer<T>;
   }
@@ -2239,7 +2306,7 @@ function coerceUnionHybrid<T extends z.ZodUnion<any>>(
       if (fastResult.value !== undefined) {
         // Complete result from Phase 1 - return immediately
         const result = fastResult.value as z.infer<T>;
-        unionResultCache.set(cacheKey, {result, score: fastResult.score || 100, timestamp: Date.now()});
+        ctx.unionResultCache.set(cacheKey, {result, score: fastResult.score || 100, timestamp: Date.now()});
         return result;
       } else {
         // Partial result - candidate for Phase 2
@@ -2258,21 +2325,36 @@ function coerceUnionHybrid<T extends z.ZodUnion<any>>(
 
 function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: ParsingContext): z.infer<T> {
   const options = schema._def.options;
-  const cacheKey = createEfficientCacheKey(value, schema);
+  const cacheKey = createEfficientCacheKey(value, schema, ctx);
+  
+  // Skip caching for potentially problematic number/boolean/lazy combinations 
+  // DISABLED: This was preventing proper caching and causing wrong type conversions
+  // const hasNumberAndBoolean = options.some(o => o instanceof z.ZodNumber) && options.some(o => o instanceof z.ZodBoolean);
+  // const hasLazy = options.some(o => o instanceof z.ZodLazy);
+  const skipCache = false; // Always use caching with session-scoped caches
+  
   
   // Cache hit check - essential for preventing infinite recursion
-  const cached = unionResultCache.get(cacheKey);
+  const cached = skipCache ? null : ctx.unionResultCache.get(cacheKey);
   if (cached && (Date.now() - cached.timestamp) < 10000) { // 10s cache TTL
     // Debug logging for cache hits (disabled)
-    // if (value.type === 'object') {
-    //   console.log(`[DEBUG UNION] CACHE HIT for object:`, JSON.stringify(coerceValueGeneric(value)), 
-    //               `-> result:`, JSON.stringify(cached.result));
+    // if (value.type === 'number' && (value.value === 1 || value.value === 2)) {
+    //   console.log(`[DEBUG] CACHE HIT - value: ${value.value}, cached result:`, cached.result);
     // }
+    
+    
     return cached.result as z.infer<T>;
   }
 
   // Recursion protection - prevent infinite loops in recursive schemas
-  const currentDepth = recursionStack.get(cacheKey) || 0;
+  const currentDepth = ctx.recursionStack.get(cacheKey) || 0;
+  
+  // Debug: Check recursion depth for specific values (disabled)
+  // if (value.type === 'number' && (value.value === 1 || value.value === 2)) {
+  //   const hasNull = options.some(o => o instanceof z.ZodNull);
+  //   console.log(`[RECURSION CHECK] Processing value ${value.value}, current depth: ${currentDepth}, recursion stack size: ${ctx.recursionStack.size}, union has null: ${hasNull}`);
+  // }
+  
   if (currentDepth >= 25) { // Balanced recursion limit to prevent infinite loops while allowing legitimate recursion
     // Return a reasonable fallback based on the value type
     if (value.type === 'string') {
@@ -2295,7 +2377,7 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
     }
   }
   
-  recursionStack.set(cacheKey, currentDepth + 1);
+  ctx.recursionStack.set(cacheKey, currentDepth + 1);
   
   try {
     // First: Apply content extraction if value contains markdown code blocks
@@ -2327,11 +2409,42 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
       }
     }
     
-    // Phase 1: Fast path disabled for debugging
-    // TODO: Re-enable after fixing the correctness issue
+    // Phase 1: Exact match phase - try direct type matches first
+    for (const option of options) {
+      const exactResult = tryDirectCast(processedValue, option);
+      
+      // Debug logging for phase 1 (disabled)
+      // if (processedValue.type === 'number' && (processedValue.value === 1 || processedValue.value === 2)) {
+      //   console.log(`[DEBUG] Phase 1 for value ${processedValue.value} - option: ${option.constructor.name}, result:`, exactResult, ', depth:', ctx.recursionStack.size);
+      // }
+      
+      if (exactResult.success && exactResult.value !== undefined) {
+        // Found exact match - return immediately without coercion
+        const result = exactResult.value as z.infer<T>;
+        
+        // Debug logging for cache set (disabled)
+        // if (processedValue.type === 'number' && (processedValue.value === 1 || processedValue.value === 2)) {
+        //   console.log(`[DEBUG] Setting cache for value ${processedValue.value} with result:`, result);
+        // }
+        // if (processedValue.type === 'number' && (processedValue.value === 1 || processedValue.value === 2)) {
+        //   console.log(`[DEBUG] Phase 1 MATCH - storing: value ${processedValue.value} -> result ${result}`);
+        // }
+        
+        if (!skipCache) ctx.unionResultCache.set(cacheKey, {result, score: exactResult.score || 100, timestamp: Date.now()});
+        
+        
+        return result;
+      }
+    }
     
-    // Phase 2: Full scoring approach with caching but without custom visitor pattern
+    // Phase 2: Full scoring approach with coercion (only if no exact match found)
     const results = [];
+    
+    // Debug logging for phase 2 start (disabled)
+    // if (processedValue.type === 'number' && processedValue.value === 2) {
+    //   console.log(`[DEBUG] Phase 2 starting for value: 2, recursion depth: ${ctx.recursionStack.size}`, ', stack keys:', Array.from(ctx.recursionStack.keys()).map(k => k.substring(0, 30)));
+    // }
+    
     for (const option of options) {
       try {
         // For string schemas in unions, preserve original input format
@@ -2366,7 +2479,7 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
         
         // Early termination for perfect matches
         if (score >= 100) {
-          unionResultCache.set(cacheKey, {result, score, timestamp: Date.now()});
+          ctx.unionResultCache.set(cacheKey, {result, score, timestamp: Date.now()});
           return result as z.infer<T>;
         }
       } catch (e) {
@@ -2400,7 +2513,7 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
         if (results.length > 0) {
           results.sort((a, b) => b.score - a.score);
           const bestResult = results[0].result as z.infer<T>;
-          unionResultCache.set(cacheKey, {result: bestResult, score: results[0].score, timestamp: Date.now()});
+          ctx.unionResultCache.set(cacheKey, {result: bestResult, score: results[0].score, timestamp: Date.now()});
           return bestResult;
         }
       }
@@ -2411,7 +2524,7 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
           const stringOption = options.find((option: z.ZodType) => option instanceof z.ZodString) as z.ZodString;
           const stringValue = value.type === 'string' ? value.value : JSON.stringify(coerceValueGeneric(value));
           const result = stringOption.parse(stringValue) as z.infer<T>;
-          unionResultCache.set(cacheKey, {result, score: 60, timestamp: Date.now()});
+          ctx.unionResultCache.set(cacheKey, {result, score: 60, timestamp: Date.now()});
           return result;
         } catch {
           // Continue to next fallback
@@ -2426,7 +2539,7 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
         const nullableOption = options.find((option: z.ZodType) => option instanceof z.ZodNullable);
         try {
           const result = nullableOption!.parse(null) as z.infer<T>;
-          unionResultCache.set(cacheKey, {result, score: 30, timestamp: Date.now()});
+          ctx.unionResultCache.set(cacheKey, {result, score: 30, timestamp: Date.now()});
           return result;
         } catch {
           // Continue to next fallback
@@ -2437,7 +2550,7 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
         const optionalOption = options.find((option: z.ZodType) => option instanceof z.ZodOptional);
         try {
           const result = optionalOption!.parse(undefined) as z.infer<T>;
-          unionResultCache.set(cacheKey, {result, score: 30, timestamp: Date.now()});
+          ctx.unionResultCache.set(cacheKey, {result, score: 30, timestamp: Date.now()});
           return result;
         } catch {
           // Continue to next fallback  
@@ -2464,7 +2577,7 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
             
             if (defaultValue !== null) {
               const result = option.parse(defaultValue) as z.infer<T>;
-              unionResultCache.set(cacheKey, {result, score: 5, timestamp: Date.now()}); // Lower score
+              ctx.unionResultCache.set(cacheKey, {result, score: 5, timestamp: Date.now()}); // Lower score
               return result;
             }
           } catch {
@@ -2480,15 +2593,17 @@ function coerceUnion<T extends z.ZodUnion<any>>(value: Value, schema: T, ctx: Pa
     // Sort by score (higher is better) and return the best match
     results.sort((a, b) => b.score - a.score);
     const bestResult = results[0].result as z.infer<T>;
-    unionResultCache.set(cacheKey, {result: bestResult, score: results[0].score, timestamp: Date.now()});
+    if (!skipCache) ctx.unionResultCache.set(cacheKey, {result: bestResult, score: results[0].score, timestamp: Date.now()});
+    
+    
     return bestResult;
   } finally {
     // Decrement recursion depth
     const newDepth = currentDepth - 1;
     if (newDepth <= 0) {
-      recursionStack.delete(cacheKey);
+      ctx.recursionStack.delete(cacheKey);
     } else {
-      recursionStack.set(cacheKey, newDepth);
+      ctx.recursionStack.set(cacheKey, newDepth);
     }
   }
 }
