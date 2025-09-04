@@ -1,5 +1,6 @@
 import { parseWithStateMachine } from './state-machine.js';
 import { Value } from './value.js';
+import { dedent } from './helpers/dedent.js';
 
 export function fixJson(input: string): string {
   let fixed = input.trim();
@@ -11,6 +12,35 @@ export function fixJson(input: string): string {
   if (fixed.startsWith("##FIXED##")) {
     return fixed.substring(9); // Remove the marker and return the fixed JSON
   }
+  
+  // Handle triple-quoted strings BEFORE fixing double-escaped quotes to avoid conflicts
+  // """content""" → "content"
+  fixed = fixed.replace(/"""([\s\S]*?)"""/g, (match, content) => {
+    const dedented = dedent(content);
+    return JSON.stringify(dedented);
+  });
+  
+  // '''content''' → "content"
+  fixed = fixed.replace(/'''([\s\S]*?)'''/g, (match, content) => {
+    const dedented = dedent(content);
+    return JSON.stringify(dedented);
+  });
+  
+  // Handle triple backticks: ```content``` → "content"
+  fixed = fixed.replace(/```([\s\S]*?)```/g, (match, content) => {
+    // Remove first line if it looks like a language hint
+    const lines = content.split('\n');
+    const cleanContent = lines.length > 1 && lines[0].trim().match(/^[a-z]+$/i) 
+      ? lines.slice(1).join('\n') 
+      : content;
+    const dedented = dedent(cleanContent);
+    return JSON.stringify(dedented);
+  });
+  
+  // Handle backtick strings: `content` → "content"
+  fixed = fixed.replace(/`([^`]*)`/g, (match, content) => {
+    return JSON.stringify(content);
+  });
   
   // Fix double-escaped quotes: ""text"" → "text"
   // This handles cases like {""a"": ""b""} → {"a": "b"}
@@ -25,10 +55,6 @@ export function fixJson(input: string): string {
     return fixed;
   }
   
-  // Handle triple-quoted strings: """content""" → "content"
-  fixed = fixed.replace(/"""([\s\S]*?)"""/g, (match, content) => {
-    return `"${content.replace(/"/g, '\\"')}"`;
-  });
   
   // Fix numbers with commas: -2,000.00 → -2000.00
   fixed = fixCommaSeparatedNumbers(fixed);

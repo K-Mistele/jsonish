@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Value, createStringValue, createNumberValue, createBooleanValue } from './value.js';
 import { ParsingContext, createParsingContext } from './parser.js';
+import { dedent } from './helpers/dedent.js';
 
 export function coerceToString(value: Value, schema: z.ZodString): string {
   switch (value.type) {
@@ -382,26 +383,26 @@ function matchStringLiteral(input: string, expected: string): string | null {
     throw new Error('Incomplete quoted string - streaming validation failure');
   }
   
-  // Layer 2: Remove quotes and try again
-  const cleanInput = input.replace(/^["']|["']$/g, '');
-  if (cleanInput === expected) {
+  // Layer 2: Advanced quote stripping and try again
+  const strippedResult = stripQuotes(input);
+  if (strippedResult.content === expected) {
     return expected;
   }
   
   // Layer 3: Case-insensitive match
-  if (cleanInput.toLowerCase() === expected.toLowerCase()) {
+  if (strippedResult.content.toLowerCase() === expected.toLowerCase()) {
     return expected; // Return expected case, not input case
   }
   
   // Layer 4: Punctuation stripping + case-insensitive
-  const normalizedInput = normalizeLiteralString(cleanInput);
+  const normalizedInput = normalizeLiteralString(strippedResult.content);
   const normalizedExpected = normalizeLiteralString(expected);
   if (normalizedInput === normalizedExpected) {
     return expected;
   }
   
   // Layer 5: Unicode normalization (international support)
-  const unicodeInput = normalizeUnicodeString(cleanInput);
+  const unicodeInput = normalizeUnicodeString(strippedResult.content);
   const unicodeExpected = normalizeUnicodeString(expected);
   if (unicodeInput === unicodeExpected) {
     return expected;
@@ -528,5 +529,37 @@ export function detectLiteralAmbiguity(text: string, literalValues: any[]): bool
   }
   
   return foundLiterals.length > 1;
+}
+
+function stripQuotes(input: string): { content: string; quoteType: 'double' | 'single' | 'backtick' | 'triple' | 'triple-backtick' | 'none' } {
+  const trimmed = input.trim();
+  
+  // Triple backticks (highest priority - longest pattern)
+  if (trimmed.startsWith('```') && trimmed.endsWith('```') && trimmed.length > 6) {
+    const content = trimmed.slice(3, -3);
+    const lines = content.split('\n');
+    const cleanContent = lines.length > 1 ? lines.slice(1).join('\n') : content; // Remove language hint
+    return { content: dedent(cleanContent), quoteType: 'triple-backtick' };
+  }
+  
+  // Triple quotes
+  if ((trimmed.startsWith('"""') && trimmed.endsWith('"""')) || 
+      (trimmed.startsWith("'''") && trimmed.endsWith("'''"))) {
+    const content = trimmed.slice(3, -3);
+    return { content: dedent(content), quoteType: 'triple' };
+  }
+  
+  // Backticks
+  if (trimmed.startsWith('`') && trimmed.endsWith('`') && trimmed.length > 2) {
+    return { content: trimmed.slice(1, -1), quoteType: 'backtick' };
+  }
+  
+  // Single/double quotes (existing logic)
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return { content: trimmed.slice(1, -1), quoteType: trimmed[0] === '"' ? 'double' : 'single' };
+  }
+  
+  return { content: input, quoteType: 'none' };
 }
 

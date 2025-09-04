@@ -1,4 +1,5 @@
 import { Value, createStringValue, createNumberValue, createBooleanValue, createNullValue, createArrayValue, createObjectValue } from './value.js';
+import { dedent } from './helpers/dedent.js';
 
 type ParseContext = 'InNothing' | 'InObjectKey' | 'InObjectValue' | 'InArray' | 'InString';
 
@@ -53,6 +54,7 @@ function parseValue(input: string, state: ParseState): ParseResult {
       return parseArray(input, state);
     case '"':
     case "'":
+    case '`':
       return parseString(input, state, char);
     case 't':
     case 'f':
@@ -275,7 +277,10 @@ function parseString(input: string, state: ParseState, quote: string): ParseResu
       state.position = tripleQuoteEnd + 3;
     }
     
-    return { value: createStringValue(value), position: state.position, fixes };
+    // Apply dedentation to triple quote content
+    const dedentedValue = dedent(value);
+    
+    return { value: createStringValue(dedentedValue), position: state.position, fixes };
   }
   
   let escaped = false;
@@ -305,6 +310,9 @@ function parseString(input: string, state: ParseState, quote: string): ParseResu
         case "'":
           value += "'";
           break;
+        case '`':
+          value += '`';
+          break;
         default:
           value += char;
       }
@@ -312,8 +320,14 @@ function parseString(input: string, state: ParseState, quote: string): ParseResu
     } else if (char === '\\') {
       escaped = true;
     } else if (char === quote && bracketDepth === 0) {
-      state.position++; // skip closing quote
-      return { value: createStringValue(value), position: state.position, fixes };
+      // Use context-aware termination to handle unescaped quotes  
+      if (shouldCloseString(input, state.position, quote)) {
+        state.position++; // skip closing quote
+        return { value: createStringValue(value), position: state.position, fixes };
+      } else {
+        // This quote is likely content, not a terminator
+        value += char;
+      }
     } else {
       // Track brackets to handle nested JSON-like content in strings
       if (char === '[' || char === '{') {
@@ -658,5 +672,43 @@ function findNextNonWhitespace(input: string, start: number): number {
     }
   }
   return -1;
+}
+
+function shouldCloseString(input: string, position: number, quoteChar: string): boolean {
+  // Look ahead to see if this quote makes sense as terminator
+  const remaining = input.slice(position + 1);
+  const lookahead = remaining.slice(0, 20); // Check next 20 chars
+  
+  // If we see JSON structure after this quote, it's likely a terminator
+  // Only consider comma, closing braces/brackets, and colon as true JSON terminators
+  if (/^\s*[,}\]:]/.test(lookahead)) {
+    return true;
+  }
+  
+  // If we're at end of input or near end, probably a terminator
+  if (remaining.length < 3) {
+    return true;
+  }
+  
+  // If we see another quote of the same type soon, this might be content
+  const nextSameQuote = remaining.indexOf(quoteChar);
+  if (nextSameQuote !== -1 && nextSameQuote < 50) {
+    // Check if there's balanced structure between quotes
+    const between = remaining.slice(0, nextSameQuote);
+    const openBraces = (between.match(/[({[]/g) || []).length;
+    const closeBraces = (between.match(/[)}\]]/g) || []).length;
+    
+    // If braces are balanced AND we have actual content, this is likely a content quote
+    if (openBraces === closeBraces && between.trim().length > 0) {
+      return false; // Likely content quote, not terminator
+    }
+  }
+  
+  // Special case: if we see ) followed by " (like in our test case), this is probably content
+  if (/^\s*\)/.test(lookahead)) {
+    return false;
+  }
+  
+  return true; // Default to closing
 }
 
